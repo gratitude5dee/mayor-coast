@@ -5,6 +5,7 @@ import type { CoastApplicationService } from "../src/lib/photon/contracts";
 import { runWithPhotonDeliveryContext } from "../src/lib/photon/delivery-context";
 import {
   createCoastInboundHandler,
+  contextualTapback,
   detectUnsupportedInboundContent,
   parsePollVote,
   renderResultsMarkdown,
@@ -93,7 +94,7 @@ describe("COAST inbound transport", () => {
     expect(adapter.addReaction).toHaveBeenCalledWith(
       thread.id,
       "message_1",
-      "question",
+      contextualTapback("What should I do tonight?", "message_1"),
     );
     expect(start).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
@@ -290,6 +291,15 @@ describe("COAST inbound transport", () => {
 });
 
 describe("transport formatting", () => {
+  it("uses varied, optional, deterministic tapbacks", () => {
+    expect(contextualTapback("Hi", "message_1")).toBeNull();
+    expect(contextualTapback("Thank you", "message_2")).toBe("heart");
+    expect(contextualTapback("lol", "message_3")).toBe("laugh");
+    expect(contextualTapback("Dinner", "message_4")).toBe(
+      contextualTapback("Dinner", "message_4"),
+    );
+  });
+
   it("uses a neutral second message when clarification has no results", () => {
     expect(renderResultsMarkdown([])).toContain("No picks yet");
   });

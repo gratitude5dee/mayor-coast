@@ -1,7 +1,10 @@
 import type { ConvexHttpClient } from "convex/browser";
 import { describe, expect, it, vi } from "vitest";
 
-import { ConvexCoastDataSource } from "../src/lib/convex/data-source";
+import {
+  canonicalNeighborhood,
+  ConvexCoastDataSource,
+} from "../src/lib/convex/data-source";
 
 describe("ConvexCoastDataSource", () => {
   it("uses the snapshot's event entity type and maps it into the agent contract", async () => {
@@ -49,5 +52,31 @@ describe("ConvexCoastDataSource", () => {
     );
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.entityType).toBe("event");
+  });
+
+  it("normalizes local neighborhood shorthand before issuing a bounded query", async () => {
+    const query = vi.fn().mockResolvedValue({ retrievalMode: "observed", results: [] });
+    const dataSource = new ConvexCoastDataSource(
+      { query } as unknown as ConvexHttpClient,
+      Date.parse("2026-09-01T07:00:00Z"),
+    );
+
+    await dataSource.searchExperiences({
+      query: "dinner",
+      entityType: "place",
+      neighborhoods: ["SoMa"],
+      primaryTypes: [],
+      priceBands: [],
+      startAtMs: null,
+      endAtMs: null,
+      limit: 5,
+      matchMode: "observed",
+    });
+
+    expect(query).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ neighborhoodId: "South of Market" }),
+    );
+    expect(canonicalNeighborhood("Downtown")).toBe("Financial District/South Beach");
   });
 });

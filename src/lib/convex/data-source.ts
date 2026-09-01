@@ -40,6 +40,7 @@ export class ConvexCoastDataSource implements CoastDataSource {
   async searchExperiences(
     input: SearchExperiencesInput,
   ): Promise<SearchExperiencesResult> {
+    const neighborhoods = input.neighborhoods.map(canonicalNeighborhood);
     const response = await this.client.query(api.dataset.searchExperiences, {
       searchText: input.query,
       nowMs: this.nowMs,
@@ -49,8 +50,8 @@ export class ConvexCoastDataSource implements CoastDataSource {
       ...(input.entityType === "any"
         ? {}
         : { entityType: input.entityType }),
-      ...(input.neighborhoods.length === 1
-        ? { neighborhoodId: input.neighborhoods[0] }
+      ...(neighborhoods.length === 1
+        ? { neighborhoodId: neighborhoods[0] }
         : {}),
       ...(input.primaryTypes.length === 1
         ? { primaryType: input.primaryTypes[0] }
@@ -66,7 +67,7 @@ export class ConvexCoastDataSource implements CoastDataSource {
           ? item.matchSource === "observed"
           : item.matchSource === "inferred",
       )
-      .filter((item) => matchesArray(input.neighborhoods, item.neighborhoodId))
+      .filter((item) => matchesArray(neighborhoods, item.neighborhoodId))
       .filter((item) => matchesArray(input.primaryTypes, item.primaryType))
       .filter((item) => matchesArray(input.priceBands, item.priceBand))
       .filter((item) =>
@@ -160,6 +161,20 @@ function matchesArray(
   if (actual === null) return false;
   const normalized = actual.trim().toLowerCase();
   return requested.some((value) => value.trim().toLowerCase() === normalized);
+}
+
+/** The scraper's canonical neighborhood labels stay stable while COAST accepts local shorthand. */
+export function canonicalNeighborhood(value: string): string {
+  const normalized = value.replace(/\s+/gu, " ").trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    downtown: "Financial District/South Beach",
+    "financial district": "Financial District/South Beach",
+    "financial district/south beach": "Financial District/South Beach",
+    "japan town": "Japantown",
+    soma: "South of Market",
+    "south of market": "South of Market",
+  };
+  return aliases[normalized] ?? value.replace(/\s+/gu, " ").trim();
 }
 
 function timingLabel(startAtMs: number | null, neighborhood: string): string {

@@ -109,13 +109,12 @@ async function acknowledgeAndMonitor(
   if (claim.shouldAcknowledge) {
     acknowledgments.push(thread.markAsRead(message));
     if (claim.command === "none" && !suppressReaction) {
-      acknowledgments.push(
-        dependencies.adapter.addReaction(
-          thread.id,
-          message.id,
-          contextualTapback(message.text),
-        ),
-      );
+      const tapback = contextualTapback(message.text, message.id);
+      if (tapback !== null) {
+        acknowledgments.push(
+          dependencies.adapter.addReaction(thread.id, message.id, tapback),
+        );
+      }
     }
   }
   if (claim.shouldStartTyping) acknowledgments.push(typing.start());
@@ -238,15 +237,40 @@ function hasCoordinatePair(value: Record<string, unknown>): boolean {
   return typeof latitude === "number" && typeof longitude === "number";
 }
 
-function contextualTapback(text: string): "heart" | "like" | "question" {
+type CoastTapback = "heart" | "like" | "question" | "laugh" | "emphasize";
+
+/**
+ * Keep acknowledgement instant but low-key. It is deterministic per message so
+ * a retried webhook never changes its visible reaction.
+ */
+export function contextualTapback(
+  text: string,
+  messageId: string,
+): CoastTapback | null {
   const normalized = text.trim().toLowerCase();
-  if (/\?|\b(?:where|when|what|which|who|how|can|could|should)\b/.test(normalized)) {
-    return "question";
+  if (!normalized || /^(?:hi|hey|hello|sup|yo|howdy|what'?s up)[!. ]*$/u.test(normalized)) {
+    return null;
   }
   if (/\b(?:thanks|thank you|love|perfect|amazing|great)\b/.test(normalized)) {
     return "heart";
   }
-  return "like";
+  if (/\b(?:lol|lmao|haha|😂)\b/u.test(normalized)) return "laugh";
+
+  const bucket = stableTapbackBucket(`${messageId}:${normalized}`);
+  if (/\?|\b(?:where|when|what|which|who|how|can|could|should)\b/u.test(normalized)) {
+    return bucket % 3 === 0 ? null : "question";
+  }
+  if (bucket % 4 === 0) return null;
+  return ["like", "emphasize", "heart"][bucket % 3] as CoastTapback;
+}
+
+function stableTapbackBucket(value: string): number {
+  let hash = 2_166_136_261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
 }
 
 type PollVote = { optionLabel: string; pollTitle: string; selected: boolean };

@@ -43,6 +43,48 @@ function isEligible(card: ExperienceCard, nowMs: number): boolean {
   return isServingExperienceEligible(card, nowMs);
 }
 
+type DiscoveryFallback = {
+  entityType: "event" | "place";
+  primaryType?: string;
+};
+
+/**
+ * Full-text search should stay literal for named venues, cuisines, and artists.
+ * These intentionally broad words are the exception: people naturally ask for
+ * "dinner" or "a drink," while a source card normally says "restaurant" or
+ * "bar." The fallback remains an indexed, source-backed browse and never
+ * fabricates an attribute the source did not provide.
+ */
+function discoveryFallback(
+  searchText: string,
+  requestedEntityType: "event" | "place" | undefined,
+): DiscoveryFallback | null {
+  const normalized = searchText.trim().toLowerCase();
+  if (
+    /\b(?:food|eat|meal|dinner|lunch|brunch|restaurant)\b/u.test(normalized) &&
+    (requestedEntityType === undefined || requestedEntityType === "place")
+  ) {
+    return { entityType: "place", primaryType: "restaurant" };
+  }
+  if (
+    /\b(?:drink|drinks|bar|cocktail|wine|beer|brewery|happy hour|mocktail)\b/u.test(
+      normalized,
+    ) &&
+    (requestedEntityType === undefined || requestedEntityType === "place")
+  ) {
+    return { entityType: "place", primaryType: "bar" };
+  }
+  if (
+    /\b(?:event|events|concert|show|party|music|comedy|dance|nightlife)\b/u.test(
+      normalized,
+    ) &&
+    (requestedEntityType === undefined || requestedEntityType === "event")
+  ) {
+    return { entityType: "event" };
+  }
+  return null;
+}
+
 function compactCard(
   card: ExperienceCard,
   matchSource: "observed" | "inferred",
@@ -136,12 +178,58 @@ export const searchExperiences = query({
       .slice(0, limit)
       .map((card) => compactCard(card, "observed"));
 
-    if (
-      observed.length >= minimumObserved ||
-      args.allowInferredFallback === false ||
-      observed.length >= limit
-    ) {
+    if (observed.length >= minimumObserved || observed.length >= limit) {
       return { retrievalMode: "observed" as const, results: observed };
+    }
+
+    const fallback = discoveryFallback(searchText, args.entityType);
+    const appendDiscoveryFallback = async (
+      existing: ReturnType<typeof compactCard>[],
+    ) => {
+      if (fallback === null || existing.length >= limit) return existing;
+
+      const neighborhoodId = args.neighborhoodId;
+      const candidates = neighborhoodId === undefined
+        ? await ctx.db
+            .query("sfExperienceCards")
+            .withIndex("by_kind_start", (q) =>
+              q
+                .eq("inferred.entityType", fallback.entityType)
+                .eq("inferred.activeStatus", "active"),
+            )
+            .take(MAX_CANDIDATE_READ)
+        : await ctx.db
+            .query("sfExperienceCards")
+            .withIndex("by_neighborhood_start", (q) =>
+              q
+                .eq("inferred.neighborhoodId", neighborhoodId)
+                .eq("inferred.activeStatus", "active"),
+            )
+            .take(MAX_CANDIDATE_READ);
+
+      const seen = new Set(existing.map((card) => card.externalId));
+      const primaryType = args.primaryType ?? fallback.primaryType;
+      const priceBand = args.priceBand;
+      const additions = candidates
+        .filter(
+          (card) =>
+            !seen.has(card.externalId) &&
+            card.inferred.entityType === fallback.entityType &&
+            (primaryType === undefined || card.inferred.primaryType === primaryType) &&
+            (priceBand === undefined || card.inferred.priceBand === priceBand) &&
+            card.observed.canonicalUrl.trim().length > 0 &&
+            isEligible(card, args.nowMs),
+        )
+        .slice(0, limit - existing.length)
+        .map((card) => compactCard(card, "observed"));
+      return [...existing, ...additions];
+    };
+
+    if (args.allowInferredFallback === false) {
+      return {
+        retrievalMode: "observed" as const,
+        results: await appendDiscoveryFallback(observed),
+      };
     }
 
     const inferredCandidates = await ctx.db
@@ -172,9 +260,12 @@ export const searchExperiences = query({
       .slice(0, limit - observed.length)
       .map((card) => compactCard(card, "inferred"));
 
+    const combined = [...observed, ...inferred];
+    const results = await appendDiscoveryFallback(combined);
     return {
-      retrievalMode: "inferred_fallback" as const,
-      results: [...observed, ...inferred],
+      retrievalMode:
+        inferred.length > 0 ? ("inferred_fallback" as const) : ("observed" as const),
+      results,
     };
   },
 });

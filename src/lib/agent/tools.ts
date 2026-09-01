@@ -49,7 +49,7 @@ export const COAST_RESPONSE_TOOLS = [
   zodResponsesFunction({
     name: "searchExperiences",
     description:
-      "Search the bounded SF experience-card index. Search before asking non-blocking preference questions. Observed text is always searched first; the runtime may add clearly labeled inferred matches only when observed retrieval is weak. To resolve a trusted priorSelections reference, search by the supplied source-backed title so the record is reacquired in this turn.",
+      "Search the bounded SF experience-card index. Search before asking non-blocking preference questions. Use a person’s natural discovery term (for example dinner, drinks, or nightlife); broad category terms receive an indexed source-backed browse if literal text is weak. Observed text is always searched first; the runtime may add clearly labeled inferred matches only when observed retrieval is weak. To resolve a trusted priorSelections reference, search by the supplied source-backed title so the record is reacquired in this turn.",
     parameters: SearchExperiencesToolInputSchema,
   }),
   zodResponsesFunction({

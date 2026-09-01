@@ -160,6 +160,7 @@ function isTerminalPollVoteError(error: unknown): boolean {
   return [
     "POLL_SELECTION_SUPERSEDED",
     "POLL_SELECTION_NOT_PENDING",
+    "POLL_SELECTION_NOT_CHANGEABLE",
     "POLL_OPTION_NOT_FOUND",
     "POLL_THREAD_NOT_FOUND",
     "POLL_USER_NOT_ACTIVE",

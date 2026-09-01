@@ -4,6 +4,8 @@ import { z } from "zod";
 import { api } from "../../../../../convex/_generated/api";
 import {
   buildCalendarIcs,
+  bookingDetailsFromExperienceFields,
+  calendarFileName,
   locationFromExperienceFields,
   presentationFromExperienceDetails,
 } from "@/lib/coast";
@@ -36,6 +38,7 @@ const requestSchema = z
       "results",
       "experience_card",
       "calendar_attachment",
+      "reservation_action",
       "location_request",
       "maps_card",
       "poll",
@@ -99,7 +102,10 @@ export async function POST(request: Request): Promise<Response> {
       providerMessageId = (await adapter.sendMiniApp(threadId, previewUrl)).id;
     } else if (input.stage === "calendar_attachment") {
       const { presentation } = await presentationForPayload(input.payload, env.CONVEX_URL);
-      if (presentation.calendarFileName === undefined) {
+      const overrideStartAtMs = optionalFiniteMs(input.payload.startAtMs);
+      const overrideEndAtMs = optionalFiniteMs(input.payload.endAtMs);
+      const effectiveStartAtMs = overrideStartAtMs ?? presentation.startAtMs;
+      if (effectiveStartAtMs === null) {
         throw new Error("CALENDAR_EVENT_REQUIRES_START_TIME");
       }
       providerMessageId = (
@@ -107,13 +113,32 @@ export async function POST(request: Request): Promise<Response> {
           raw: "",
           files: [
             {
-              data: Buffer.from(buildCalendarIcs(presentation), "utf8"),
-              filename: presentation.calendarFileName,
+              data: Buffer.from(
+                buildCalendarIcs(
+                  presentation,
+                  overrideStartAtMs === null
+                    ? undefined
+                    : { startAtMs: overrideStartAtMs, endAtMs: overrideEndAtMs },
+                ),
+                "utf8",
+              ),
+              filename: presentation.calendarFileName ?? calendarFileName(effectiveStartAtMs),
               mimeType: "text/calendar; charset=utf-8",
             },
           ],
         })
       ).id;
+    } else if (input.stage === "reservation_action") {
+      const deliveryExperience = await presentationForPayload(input.payload, env.CONVEX_URL);
+      const booking = bookingDetailsFromExperienceFields(
+        deliveryExperience.experienceFields,
+      );
+      const action = booking.url !== null
+        ? `Confirm here: ${booking.url}`
+        : booking.phone !== null
+          ? `Call to confirm: ${booking.phone}`
+          : `Confirm details here: ${deliveryExperience.presentation.canonicalUrl}`;
+      providerMessageId = (await adapter.postMessage(threadId, action)).id;
     } else if (input.stage === "location_request") {
       const request = await requestLocationSharing({
         adapter,
@@ -192,8 +217,15 @@ async function presentationForPayload(
   }
   return {
     presentation,
+    experienceFields: experience.experienceFields,
     ...(location.latitude !== null && location.longitude !== null
       ? { destination: { latitude: location.latitude, longitude: location.longitude } }
       : {}),
   };
+}
+
+function optionalFiniteMs(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : null;
 }

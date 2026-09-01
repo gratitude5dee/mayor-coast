@@ -235,11 +235,13 @@ export default defineSchema({
     status: v.union(v.literal("active"), v.literal("closed")),
     activeTurnId: v.optional(v.id("coastTurns")),
     latestInboundAtMs: v.number(),
+    lastProactiveAtMs: v.optional(v.number()),
     createdAtMs: v.number(),
     updatedAtMs: v.number(),
   })
     .index("by_provider_thread", ["provider", "providerThreadKeyHash"])
-    .index("by_user_updated", ["userId", "updatedAtMs"]),
+    .index("by_user_updated", ["userId", "updatedAtMs"])
+    .index("by_status_inbound", ["status", "latestInboundAtMs"]),
 
   coastMessages: defineTable({
     userId: v.id("coastUsers"),
@@ -344,6 +346,8 @@ export default defineSchema({
       v.literal("expired"),
     ),
     selectedOption: v.optional(v.string()),
+    answerMessageId: v.optional(v.id("coastMessages")),
+    answerTurnId: v.optional(v.id("coastTurns")),
     createdAtMs: v.number(),
     answeredAtMs: v.optional(v.number()),
     expiresAtMs: v.number(),

@@ -10,7 +10,8 @@ import {
 } from "./lib/pollMatching";
 import { inboundClaimResult } from "./lib/validators";
 
-const BURST_DEBOUNCE_MS = 150;
+/** Keep typing visible immediately while the native poll remains changeable. */
+export const POLL_SETTLE_MS = 2_000;
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const NEWER_INBOUND_TOLERANCE_MS = 2_000;
 
@@ -79,14 +80,11 @@ export const claimVote = internalMutation({
           )
           .unique();
 
-    if (
-      poll !== null &&
-      (poll.threadId !== thread._id ||
-        poll.status !== "pending" ||
-        !poll.options.some((option) =>
-          isSamePollText(option, args.selectedOption),
-        ))
-    ) {
+    const providerMatchedPollIsUsable = poll !== null &&
+      poll.threadId === thread._id &&
+      (poll.status === "pending" || poll.status === "answered") &&
+      poll.options.some((option) => isSamePollText(option, args.selectedOption));
+    if (!providerMatchedPollIsUsable) {
       poll = null;
     }
 
@@ -107,6 +105,20 @@ export const claimVote = internalMutation({
         selectedOption: args.selectedOption,
       });
     }
+    if (poll === null && args.providerPollId === undefined) {
+      const recentlyAnswered = await ctx.db
+        .query("coastPolls")
+        .withIndex("by_thread_status", (q) =>
+          q.eq("threadId", thread._id).eq("status", "answered"),
+        )
+        .order("desc")
+        .take(6);
+      poll = recentlyAnswered.find((candidate) =>
+        candidate.answeredAtMs !== undefined &&
+        candidate.answeredAtMs + POLL_SETTLE_MS >= args.receivedAtMs &&
+        isSamePollText(candidate.question, args.pollTitle) &&
+        candidate.options.some((option) => isSamePollText(option, args.selectedOption))) ?? null;
+    }
     if (poll === null || poll.expiresAtMs <= args.receivedAtMs) {
       throw new Error("POLL_SELECTION_NOT_PENDING");
     }
@@ -124,6 +136,83 @@ export const claimVote = internalMutation({
       (option) => isSamePollText(option, args.selectedOption),
     );
     if (canonicalOption === undefined) throw new Error("POLL_OPTION_NOT_FOUND");
+
+    if (poll.status === "answered") {
+      if (poll.answerTurnId === undefined || poll.answerMessageId === undefined) {
+        throw new Error("POLL_SELECTION_NOT_CHANGEABLE");
+      }
+      const answerTurn = await ctx.db.get(poll.answerTurnId);
+      const answerMessage = await ctx.db.get(poll.answerMessageId);
+      if (
+        answerTurn === null ||
+        answerMessage === null ||
+        answerTurn.state !== "debouncing" ||
+        answerTurn.threadId !== thread._id ||
+        answerMessage.turnId !== answerTurn._id
+      ) {
+        throw new Error("POLL_SELECTION_NOT_CHANGEABLE");
+      }
+      const revision = answerTurn.revision + 1;
+      await ctx.db.patch(poll._id, {
+        selectedOption: canonicalOption,
+        answeredAtMs: args.receivedAtMs,
+      });
+      await ctx.db.patch(answerMessage._id, {
+        providerMessageId: args.providerMessageId,
+        body: `Poll answer: ${poll.question} — ${canonicalOption}`,
+        bodyExpiresAtMs: args.receivedAtMs + RAW_TEXT_RETENTION_MS,
+        createdAtMs: args.receivedAtMs,
+      });
+      await ctx.db.patch(answerTurn._id, {
+        revision,
+        scheduledForMs: args.receivedAtMs + POLL_SETTLE_MS,
+        updatedAtMs: args.receivedAtMs,
+      });
+      await ctx.db.patch(thread._id, {
+        encryptedProviderThreadRef: args.encryptedThreadRef,
+        latestInboundAtMs: args.receivedAtMs,
+        updatedAtMs: args.receivedAtMs,
+      });
+      await ctx.db.patch(user._id, {
+        lastSeenAtMs: args.receivedAtMs,
+        updatedAtMs: args.receivedAtMs,
+      });
+      await ctx.db.insert("inboundDeliveryClaims", {
+        dedupeKey,
+        webhookId: args.webhookId,
+        providerMessageId: args.providerMessageId,
+        userId: user._id,
+        threadId: thread._id,
+        messageId: answerMessage._id,
+        turnId: answerTurn._id,
+        status: "claimed",
+        command: "none" as const,
+        createdAtMs: args.receivedAtMs,
+      });
+      await ctx.scheduler.runAfter(POLL_SETTLE_MS, internal.turnQueue.beginGeneration, {
+        turnId: answerTurn._id,
+        expectedRevision: revision,
+      });
+      if (poll.purpose !== undefined) {
+        await ctx.scheduler.runAfter(POLL_SETTLE_MS, internal.checkIns.applySettledSemanticPoll, {
+          pollId: poll._id,
+          answerTurnId: answerTurn._id,
+          expectedTurnRevision: revision,
+        });
+      }
+      return {
+        accepted: true,
+        duplicate: false,
+        shouldAcknowledge: true,
+        shouldStartTyping: true,
+        command: "none" as const,
+        controlReply: null,
+        userId: user._id,
+        threadId: thread._id,
+        messageId: answerMessage._id,
+        turnId: answerTurn._id,
+      };
+    }
 
     await ctx.db.patch(poll._id, {
       ...(poll.providerPollId === undefined && args.providerPollId !== undefined
@@ -161,12 +250,13 @@ export const claimVote = internalMutation({
       messageIds: [messageId],
       carryForwardTurnIds: [poll.turnId],
       clarificationDepth: Math.min(2, (sourceTurn?.clarificationDepth ?? 0) + 1),
-      scheduledForMs: args.receivedAtMs + BURST_DEBOUNCE_MS,
+      scheduledForMs: args.receivedAtMs + POLL_SETTLE_MS,
       attemptCount: 0,
       createdAtMs: args.receivedAtMs,
       updatedAtMs: args.receivedAtMs,
     });
     await ctx.db.patch(messageId, { turnId });
+    await ctx.db.patch(poll._id, { answerMessageId: messageId, answerTurnId: turnId });
     await ctx.db.patch(thread._id, { activeTurnId: turnId });
     await ctx.db.insert("inboundDeliveryClaims", {
       dedupeKey,
@@ -180,10 +270,17 @@ export const claimVote = internalMutation({
       command: "none" as const,
       createdAtMs: args.receivedAtMs,
     });
-    await ctx.scheduler.runAfter(BURST_DEBOUNCE_MS, internal.turnQueue.beginGeneration, {
+    await ctx.scheduler.runAfter(POLL_SETTLE_MS, internal.turnQueue.beginGeneration, {
       turnId,
       expectedRevision: 1,
     });
+    if (poll.purpose !== undefined) {
+      await ctx.scheduler.runAfter(POLL_SETTLE_MS, internal.checkIns.applySettledSemanticPoll, {
+        pollId: poll._id,
+        answerTurnId: turnId,
+        expectedTurnRevision: 1,
+      });
+    }
 
     return {
       accepted: true,

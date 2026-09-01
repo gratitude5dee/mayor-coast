@@ -18,6 +18,11 @@ const expireCheckInsReference = makeFunctionReference<
   Record<string, never>,
   { deleted: number; expiredPolls: number; hasMore: boolean }
 >("checkIns:expireBatch");
+const scanIdleProactiveReference = makeFunctionReference<
+  "mutation",
+  Record<string, never>,
+  { scheduled: number }
+>("proactive:scanIdle");
 
 crons.daily(
   "expire raw conversation text",
@@ -51,6 +56,13 @@ crons.interval(
   "expire decision and check-in state",
   { hours: 1 },
   expireCheckInsReference,
+  {},
+);
+
+crons.interval(
+  "offer bounded personalized SF nudges",
+  { hours: 6 },
+  scanIdleProactiveReference,
   {},
 );
 

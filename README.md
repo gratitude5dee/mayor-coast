@@ -14,7 +14,7 @@ flowchart LR
     C -->|bounded retrieval| D[(SF experience cards)]
     V -->|structured tool loop| O[OpenAI Responses API]
     O -->|external IDs only| V
-    C -->|durable delivery stages| V
+    C -->|durable delivery + sparse schedules| V
     V -->|cards, calendar, polls, Find My, Maps| P
     P --> U
     C --> M[(Pseudonymous memory\nturns, polls, preferences)]
@@ -25,7 +25,9 @@ flowchart LR
 1. A signed Photon webhook is verified at Vercel; Convex atomically claims and deduplicates the inbound message.
 2. COAST marks the message read, reacts, and keeps typing active while the durable turn runs.
 3. The agent searches `sfExperienceCards` through bounded indexes and returns only source-backed external IDs.
-4. When the next step is a clear set of choices, COAST sends one native poll instead of listing alternatives in prose. Verified matches are rendered as result cards, with one calendar attachment per event.
+4. When the next step is a clear set of choices, COAST sends one native poll instead of listing alternatives in prose. A vote starts typing immediately and settles for two seconds, so changing the selection revises the same durable turn instead of sending two answers.
+5. Verified matches render as native cards. Event results and user-requested place holds can be added to Apple Calendar in one tap; every `.ics` includes a 15-minute reminder and is followed by a source-backed registration, reservation, or phone-confirmation action. Calendar holds never claim availability.
+6. Opted-in post-visit check-ins and six-hour inactivity scans run in Convex. Idle nudges require prior taste signals, respect 10 AM–10 PM SF quiet hours, are capped at one per six hours, and skip stopped, stale, or currently active conversations.
 5. A “near me” or directions request sends one native Find My request. A consented, fresh location is used only in the serverless resolver to rank public destinations or make a Maps handoff; exact origin never enters Convex, OpenAI, logs, or outbound URLs.
 
 ## Experience guarantees

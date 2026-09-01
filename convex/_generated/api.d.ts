@@ -23,6 +23,7 @@ import type * as locationRequests from "../locationRequests.js";
 import type * as pollGateway from "../pollGateway.js";
 import type * as polls from "../polls.js";
 import type * as privacy from "../privacy.js";
+import type * as proactive from "../proactive.js";
 import type * as recovery from "../recovery.js";
 import type * as service from "../service.js";
 import type * as turnQueue from "../turnQueue.js";
@@ -49,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   pollGateway: typeof pollGateway;
   polls: typeof polls;
   privacy: typeof privacy;
+  proactive: typeof proactive;
   recovery: typeof recovery;
   service: typeof service;
   turnQueue: typeof turnQueue;

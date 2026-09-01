@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   buildAgentContextMessage,
   OpenAIResponsesAgentRuntime,
+  resolveCalendarRequest,
   sanitizeAgentHistoryText,
   shouldDeliverClarificationPoll,
   withNativeChoiceRecovery,
@@ -172,6 +173,65 @@ export async function POST(request: Request): Promise<Response> {
       priorSelections: input.priorSelections ?? [],
       clarificationDepth: input.clarificationDepth ?? 0,
     });
+    const calendarRequest = resolveCalendarRequest({
+      latestMessage: latest.body,
+      recentInboundMessages: input.messages
+        .slice(0, latestInboundIndex)
+        .filter((message) => message.direction === "inbound")
+        .map((message) => message.body),
+      priorSelections: input.priorSelections ?? [],
+      nowMs,
+    });
+    if (calendarRequest?.kind === "clarify") {
+      return privateJson({
+        responseText: withCoastFirstTurnIntro(calendarRequest.responseText, isFirstTurn),
+        selectedExternalIds: [],
+        poll: calendarRequest.poll === null
+          ? null
+          : { question: calendarRequest.poll.question, options: calendarRequest.poll.options },
+        preferenceUpdates: [],
+        provenanceIds: [],
+        modelRoute: "luna_high_fast",
+        routeReasons: ["deterministic_calendar_clarification"],
+        modelSteps: 0,
+        toolCalls: 0,
+        retrievalMode: "none",
+        generationKind: "deterministic",
+        elapsedMs: Date.now() - startedAtMs,
+        serviceTier: null,
+      });
+    }
+    if (calendarRequest?.kind === "create") {
+      const [experience] = await dataSource.getExperienceDetails([
+        calendarRequest.externalId,
+      ]);
+      if (experience?.externalId === calendarRequest.externalId) {
+        return privateJson({
+          responseText: withCoastFirstTurnIntro(
+            `Locked: a one-tap calendar hold for ${calendarRequest.title}, with a 15-minute reminder. This is not a reservation—use the booking or contact option I send next to confirm it.`,
+            isFirstTurn,
+          ),
+          selectedExternalIds: [],
+          poll: null,
+          preferenceUpdates: [],
+          provenanceIds: [],
+          modelRoute: "luna_high_fast",
+          routeReasons: ["deterministic_calendar_hold"],
+          modelSteps: 0,
+          toolCalls: 1,
+          retrievalMode: "observed",
+          generationKind: "deterministic",
+          elapsedMs: Date.now() - startedAtMs,
+          serviceTier: null,
+          nextAction: {
+            type: "create_calendar",
+            targetExternalId: calendarRequest.externalId,
+            startAtMs: calendarRequest.startAtMs,
+            endAtMs: calendarRequest.endAtMs,
+          },
+        });
+      }
+    }
     const result = await agent.run({
       message: latest.body,
       pseudonymousUserId: input.threadId,

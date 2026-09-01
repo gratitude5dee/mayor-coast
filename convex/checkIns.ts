@@ -1,6 +1,7 @@
 import { makeFunctionReference } from "convex/server";
 import { v } from "convex/values";
 
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./_generated/server";
@@ -564,8 +565,91 @@ export const runDue = internalMutation({
       return false;
     }
 
+    const proactiveTurnId = await ctx.db.insert("coastTurns", {
+      userId: checkIn.userId,
+      threadId: checkIn.threadId,
+      state: "response_planned",
+      revision: 1,
+      messageIds: [],
+      carryForwardTurnIds: [],
+      clarificationDepth: 0,
+      origin: "proactive",
+      checkInId: checkIn._id,
+      plan: {
+        responseText: `How did ${card.observed.title.slice(0, 120)} land? I can line up the next move while you’re out.`,
+        selectedExternalIds: [],
+        poll: {
+          question: "What’s the next move?",
+          options: ["Drinks nearby", "Food nearby", "Something else", "I’m good"],
+        },
+        preferenceUpdates: [],
+        provenanceIds: card.inferred.provenanceIds,
+        modelRoute: "luna_high_fast",
+        routeReasons: ["opt_in_post_recommendation_check_in"],
+        modelSteps: 0,
+        toolCalls: 0,
+        retrievalMode: "observed",
+        generationKind: "deterministic",
+        elapsedMs: 0,
+        serviceTier: null,
+      },
+      scheduledForMs: nowMs,
+      generationElapsedMs: 0,
+      generationKind: "deterministic",
+      planPersistedAtMs: nowMs,
+      attemptCount: 0,
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs,
+    });
+    const arrivalPollId = await ctx.db.insert("coastPolls", {
+      userId: checkIn.userId,
+      threadId: checkIn.threadId,
+      turnId: proactiveTurnId,
+      question: "What’s the next move?",
+      options: ["Drinks nearby", "Food nearby", "Something else", "I’m good"],
+      purpose: "arrival_status",
+      checkInId: checkIn._id,
+      optionActions: [
+        { option: "Drinks nearby", action: "arrived" },
+        { option: "Food nearby", action: "arrived" },
+        { option: "Something else", action: "arrived" },
+        { option: "I’m good", action: "cancel_checkin" },
+      ],
+      status: "pending",
+      createdAtMs: nowMs,
+      expiresAtMs: checkIn.anchorExpiresAtMs,
+    });
+    const responseText = `How did ${card.observed.title.slice(0, 120)} land? I can line up the next move while you’re out.`;
+    const deliveries = [
+      { stage: "response" as const, itemKey: "response", payload: { text: responseText } },
+      {
+        stage: "poll" as const,
+        itemKey: "next-move",
+        payload: {
+          question: "What’s the next move?",
+          options: ["Drinks nearby", "Food nearby", "Something else", "I’m good"],
+        },
+      },
+    ];
+    for (const [sequence, delivery] of deliveries.entries()) {
+      await ctx.db.insert("outboundDeliveries", {
+        turnId: proactiveTurnId,
+        threadId: checkIn.threadId,
+        stage: delivery.stage,
+        sequence,
+        itemKey: delivery.itemKey,
+        idempotencyKey: `${proactiveTurnId}:${sequence}:${delivery.stage}:${delivery.itemKey}`,
+        payload: delivery.payload,
+        status: "pending",
+        attemptCount: 0,
+        nextAttemptAtMs: nowMs,
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+      });
+    }
     await ctx.db.patch(checkIn._id, {
-      status: "due",
+      status: "awaiting_arrival",
+      revision: checkIn.revision + 1,
       dueAtMs: nowMs,
       updatedAtMs: nowMs,
       anchorTitle: card.observed.title.slice(0, 200),
@@ -573,6 +657,16 @@ export const runDue = internalMutation({
       anchorH3R8: card.inferred.h3R8,
       anchorContentHash: card.contentHash,
       anchorVerifiedAtMs: card.lastVerifiedAtMs,
+      arrivalPollId,
+      proactiveTurnId,
+    });
+    await ctx.db.patch(thread._id, {
+      activeTurnId: proactiveTurnId,
+      lastProactiveAtMs: nowMs,
+      updatedAtMs: nowMs,
+    });
+    await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, {
+      turnId: proactiveTurnId,
     });
     return true;
   },
@@ -728,6 +822,76 @@ export const applyArrivalPoll = internalMutation({
       return "scheduled";
     }
     return null;
+  },
+});
+
+/** Apply only the last poll selection after the two-second change window. */
+export const applySettledSemanticPoll = internalMutation({
+  args: {
+    pollId: v.id("coastPolls"),
+    answerTurnId: v.id("coastTurns"),
+    expectedTurnRevision: v.number(),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const [poll, answerTurn] = await Promise.all([
+      ctx.db.get(args.pollId),
+      ctx.db.get(args.answerTurnId),
+    ]);
+    if (
+      poll === null ||
+      poll.status !== "answered" ||
+      poll.answerTurnId !== args.answerTurnId ||
+      answerTurn === null ||
+      answerTurn.revision !== args.expectedTurnRevision ||
+      !["debouncing", "generating"].includes(answerTurn.state) ||
+      poll.selectedOption === undefined ||
+      poll.optionActions === undefined
+    ) return false;
+    const selected = poll.optionActions.find((option) => option.option === poll.selectedOption);
+    if (selected === undefined) return false;
+
+    if (poll.purpose === "decision_confirm_checkin" && poll.decisionId !== undefined) {
+      const decision = await ctx.db.get(poll.decisionId);
+      if (decision === null || decision.status !== "proposed") return false;
+      if (selected.action === "schedule_checkin") {
+        await ctx.scheduler.runAfter(0, internal.checkIns.confirmAndSchedule, {
+          decisionId: decision._id,
+          expectedRevision: decision.revision,
+          consentPollId: poll._id,
+          explicitConsent: true,
+          nowMs: Date.now(),
+        });
+      } else if (selected.action === "confirm_without_checkin") {
+        await ctx.scheduler.runAfter(0, internal.checkIns.confirmWithoutCheckIn, {
+          decisionId: decision._id,
+          expectedRevision: decision.revision,
+          confirmationPollId: poll._id,
+          explicitChoice: true,
+          nowMs: Date.now(),
+        });
+      } else if (selected.action === "reject_decision") {
+        await ctx.scheduler.runAfter(0, internal.checkIns.rejectDecision, {
+          decisionId: decision._id,
+          expectedRevision: decision.revision,
+          confirmationPollId: poll._id,
+          nowMs: Date.now(),
+        });
+      }
+      return true;
+    }
+    if (poll.purpose === "arrival_status" && poll.checkInId !== undefined) {
+      const checkIn = await ctx.db.get(poll.checkInId);
+      if (checkIn === null) return false;
+      await ctx.scheduler.runAfter(0, internal.checkIns.applyArrivalPoll, {
+        checkInId: checkIn._id,
+        expectedRevision: checkIn.revision,
+        arrivalPollId: poll._id,
+        nowMs: Date.now(),
+      });
+      return true;
+    }
+    return false;
   },
 });
 

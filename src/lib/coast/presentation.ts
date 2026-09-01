@@ -126,8 +126,15 @@ export function buildExperiencePresentation(
   };
 }
 
-export function buildCalendarIcs(input: ExperiencePresentation): string {
-  if (input.entityType !== "event" || input.startAtMs === null) {
+export function buildCalendarIcs(
+  input: ExperiencePresentation,
+  override?: { startAtMs: number; endAtMs?: number | null },
+): string {
+  const startAtMs = finiteMs(override?.startAtMs) ?? input.startAtMs;
+  const endAtMs = override === undefined
+    ? input.endAtMs
+    : finiteMs(override.endAtMs);
+  if (startAtMs === null) {
     throw new Error("CALENDAR_EVENT_REQUIRES_START_TIME");
   }
   const lines = [
@@ -137,11 +144,11 @@ export function buildCalendarIcs(input: ExperiencePresentation): string {
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     "BEGIN:VEVENT",
-    `UID:${stableCalendarUid(input.externalId)}`,
-    `DTSTAMP:${formatIcsUtc(input.startAtMs)}`,
-    `DTSTART:${formatIcsUtc(input.startAtMs)}`,
-    ...(input.endAtMs !== null && input.endAtMs > input.startAtMs
-      ? [`DTEND:${formatIcsUtc(input.endAtMs)}`]
+    `UID:${stableCalendarUid(input.externalId, startAtMs)}`,
+    `DTSTAMP:${formatIcsUtc(startAtMs)}`,
+    `DTSTART:${formatIcsUtc(startAtMs)}`,
+    ...(endAtMs !== null && endAtMs > startAtMs
+      ? [`DTEND:${formatIcsUtc(endAtMs)}`]
       : []),
     `SUMMARY:${escapeIcsText(input.title)}`,
     ...(input.venueName || input.venueAddress
@@ -149,6 +156,11 @@ export function buildCalendarIcs(input: ExperiencePresentation): string {
       : []),
     `URL:${input.canonicalUrl}`,
     `DESCRIPTION:${escapeIcsText(input.description)}`,
+    "BEGIN:VALARM",
+    "TRIGGER:-PT15M",
+    "ACTION:DISPLAY",
+    `DESCRIPTION:${escapeIcsText(`Reminder: ${input.title}`)}`,
+    "END:VALARM",
     "END:VEVENT",
     "END:VCALENDAR",
   ];
@@ -180,8 +192,8 @@ function finiteMs(value: number | null | undefined): number | null {
     : null;
 }
 
-function stableCalendarUid(externalId: string): string {
-  return `${createHash("sha256").update(externalId, "utf8").digest("hex").slice(0, 40)}@coast.sf`;
+function stableCalendarUid(externalId: string, startAtMs: number): string {
+  return `${createHash("sha256").update(`${externalId}\u0000${startAtMs}`, "utf8").digest("hex").slice(0, 40)}@coast.sf`;
 }
 
 function escapeIcsText(value: string): string {

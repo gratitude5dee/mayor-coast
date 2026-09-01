@@ -21,6 +21,7 @@ const MAX_GENERATION_ATTEMPTS = 3;
 const AGENT_RUNTIME_DEADLINE_MS = 2_600;
 const MAX_DELIVERY_ATTEMPTS = 5;
 const POLL_TTL_MS = 24 * 60 * 60 * 1_000;
+const DECISION_PROPOSAL_TTL_MS = 2 * 60 * 60 * 1_000;
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const LOCATION_RESOLUTION_DELAYS_MS = [
   2_000,
@@ -59,6 +60,12 @@ type RuntimeTurnPlan = {
         purpose: "nearby_search" | "directions";
         targetExternalId?: string;
         travelMode?: "walking" | "driving" | "transit" | "bicycling";
+      }
+    | {
+        type: "create_calendar";
+        targetExternalId: string;
+        startAtMs: number;
+        endAtMs?: number | null;
       };
 };
 
@@ -115,6 +122,22 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
         ...(typeof action.travelMode === "string"
           ? { travelMode: action.travelMode }
           : {}),
+      };
+    } else if (
+      action.type === "create_calendar" &&
+      typeof action.targetExternalId === "string" &&
+      typeof action.startAtMs === "number" &&
+      Number.isFinite(action.startAtMs) &&
+      (action.endAtMs === undefined || action.endAtMs === null ||
+        (typeof action.endAtMs === "number" && Number.isFinite(action.endAtMs)))
+    ) {
+      normalizedNextAction = {
+        type: "create_calendar",
+        targetExternalId: action.targetExternalId.slice(0, 240),
+        startAtMs: Math.floor(action.startAtMs),
+        ...(action.endAtMs === undefined
+          ? {}
+          : { endAtMs: action.endAtMs === null ? null : Math.floor(action.endAtMs as number) }),
       };
     } else {
       throw new Error("INVALID_PLAN_NEXT_ACTION");
@@ -235,6 +258,7 @@ function stageRank(
     | "results"
     | "experience_card"
     | "calendar_attachment"
+    | "reservation_action"
     | "location_request"
     | "maps_card"
     | "poll",
@@ -242,7 +266,8 @@ function stageRank(
   if (stage === "response") return 0;
   if (stage === "results" || stage === "experience_card") return 1;
   if (stage === "calendar_attachment") return 2;
-  if (stage === "location_request" || stage === "maps_card") return 3;
+  if (stage === "reservation_action") return 3;
+  if (stage === "location_request" || stage === "maps_card") return 4;
   return 4;
 }
 
@@ -308,6 +333,13 @@ export const getGenerationContext = internalQuery({
       ),
       carryForwardTurnIds: v.array(v.id("coastTurns")),
       clarificationDepth: v.number(),
+      priorSelections: v.array(
+        v.object({
+          items: v.array(
+            v.object({ externalId: v.string(), title: v.string() }),
+          ),
+        }),
+      ),
     }),
     v.null(),
   ),
@@ -326,6 +358,30 @@ export const getGenerationContext = internalQuery({
       .query("coastPreferences")
       .withIndex("by_user", (q) => q.eq("userId", turn.userId))
       .take(MAX_CONTEXT_PREFERENCES);
+    const priorTurns = await ctx.db
+      .query("coastTurns")
+      .withIndex("by_thread_state_updated", (q) =>
+        q.eq("threadId", turn.threadId).eq("state", "sent"),
+      )
+      .order("desc")
+      .take(3);
+    const priorSelections: Array<{
+      items: Array<{ externalId: string; title: string }>;
+    }> = [];
+    for (const priorTurn of priorTurns.reverse()) {
+      const externalIds = priorTurn.plan?.selectedExternalIds.slice(0, 5) ?? [];
+      const items: Array<{ externalId: string; title: string }> = [];
+      for (const externalId of externalIds) {
+        const card = await ctx.db
+          .query("sfExperienceCards")
+          .withIndex("by_externalId", (q) => q.eq("externalId", externalId))
+          .unique();
+        if (card !== null) {
+          items.push({ externalId: card.externalId, title: card.observed.title });
+        }
+      }
+      if (items.length > 0) priorSelections.push({ items });
+    }
 
     return {
       turnId: turn._id,
@@ -348,6 +404,7 @@ export const getGenerationContext = internalQuery({
       })),
       carryForwardTurnIds: turn.carryForwardTurnIds,
       clarificationDepth: Math.max(0, Math.min(2, turn.clarificationDepth ?? 0)),
+      priorSelections,
     };
   },
 });
@@ -396,6 +453,7 @@ export const beginGeneration = internalAction({
           messages: context.messages,
           preferences: context.preferences,
           clarificationDepth: context.clarificationDepth,
+          priorSelections: context.priorSelections,
           limits: { modelSteps: MAX_MODEL_STEPS, toolCalls: MAX_TOOL_CALLS },
         }),
         signal: AbortSignal.timeout(AGENT_RUNTIME_DEADLINE_MS),
@@ -463,6 +521,25 @@ export const persistPlan = internalMutation({
       cards.push(card);
     }
 
+    let calendarCard: Doc<"sfExperienceCards"> | null = null;
+    if (args.plan.nextAction?.type === "create_calendar") {
+      const calendarAction = args.plan.nextAction;
+      calendarCard = await ctx.db
+        .query("sfExperienceCards")
+        .withIndex("by_externalId", (q) =>
+          q.eq("externalId", calendarAction.targetExternalId),
+        )
+        .unique();
+      if (
+        calendarCard === null ||
+        !isServingExperienceEligible(calendarCard, args.nowMs) ||
+        calendarAction.startAtMs < args.nowMs - 5 * 60_000 ||
+        calendarAction.startAtMs > args.nowMs + 365 * 24 * 60 * 60_000
+      ) {
+        throw new Error("CALENDAR_TARGET_INVALID");
+      }
+    }
+
     const authoritativeProvenance = new Set(cards.flatMap((card) => card.inferred.provenanceIds));
     const safePlan = {
       ...args.plan,
@@ -505,6 +582,7 @@ export const persistPlan = internalMutation({
         | "response"
         | "experience_card"
         | "calendar_attachment"
+        | "reservation_action"
         | "poll";
       itemKey: string;
       payload: Record<string, unknown>;
@@ -532,6 +610,72 @@ export const persistPlan = internalMutation({
           itemKey: card.externalId,
           payload: { externalId: card.externalId },
           sequence: stages.length,
+        });
+      }
+    }
+    if (calendarCard !== null && safePlan.nextAction?.type === "create_calendar") {
+      stages.push({
+        stage: "calendar_attachment",
+        itemKey: `hold:${calendarCard.externalId}:${safePlan.nextAction.startAtMs}`,
+        payload: {
+          externalId: calendarCard.externalId,
+          startAtMs: safePlan.nextAction.startAtMs,
+          endAtMs: safePlan.nextAction.endAtMs ?? null,
+        },
+        sequence: stages.length,
+      });
+      stages.push({
+        stage: "reservation_action",
+        itemKey: calendarCard.externalId,
+        payload: { externalId: calendarCard.externalId },
+        sequence: stages.length,
+      });
+      const checkInAtMs = calendarCard.inferred.entityType === "event"
+        ? Math.min(
+            safePlan.nextAction.endAtMs ?? safePlan.nextAction.startAtMs + 90 * 60_000,
+            safePlan.nextAction.startAtMs + 2 * 60 * 60_000,
+          )
+        : safePlan.nextAction.startAtMs + 90 * 60_000;
+      if (
+        checkInAtMs >= args.nowMs + 60_000 &&
+        checkInAtMs <= args.nowMs + 12 * 60 * 60_000
+      ) {
+        const decisionId = await ctx.db.insert("coastDecisions", {
+          userId: turn.userId,
+          threadId: turn.threadId,
+          sourceTurnId: turn._id,
+          sourceMessageIds: turn.messageIds,
+          experienceExternalId: calendarCard.externalId,
+          entityType: calendarCard.inferred.entityType,
+          status: "proposed",
+          revision: 1,
+          proposedAtMs: args.nowMs,
+          updatedAtMs: args.nowMs,
+          expiresAtMs: args.nowMs + DECISION_PROPOSAL_TTL_MS,
+        });
+        const question = "Want COAST to check in after?";
+        const options = ["Yes—check in", "No thanks"];
+        stages.push({
+          stage: "poll",
+          itemKey: `check-in:${calendarCard.externalId}`,
+          payload: { question, options },
+          sequence: stages.length,
+        });
+        await ctx.db.insert("coastPolls", {
+          userId: turn.userId,
+          threadId: turn.threadId,
+          turnId: turn._id,
+          question,
+          options,
+          purpose: "decision_confirm_checkin",
+          decisionId,
+          optionActions: [
+            { option: options[0]!, action: "schedule_checkin", scheduledForMs: checkInAtMs },
+            { option: options[1]!, action: "confirm_without_checkin" },
+          ],
+          status: "pending",
+          createdAtMs: args.nowMs,
+          expiresAtMs: args.nowMs + DECISION_PROPOSAL_TTL_MS,
         });
       }
     }
@@ -654,6 +798,7 @@ export const claimNextDelivery = internalMutation({
         v.literal("results"),
         v.literal("experience_card"),
         v.literal("calendar_attachment"),
+        v.literal("reservation_action"),
         v.literal("location_request"),
         v.literal("maps_card"),
         v.literal("poll"),

@@ -15,6 +15,7 @@ import type * as dataset from "../dataset.js";
 import type * as http from "../http.js";
 import type * as imports from "../imports.js";
 import type * as inbound from "../inbound.js";
+import type * as lib_pollMatching from "../lib/pollMatching.js";
 import type * as lib_service_auth from "../lib/service_auth.js";
 import type * as lib_servingEligibility from "../lib/servingEligibility.js";
 import type * as lib_validators from "../lib/validators.js";
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   imports: typeof imports;
   inbound: typeof inbound;
+  "lib/pollMatching": typeof lib_pollMatching;
   "lib/service_auth": typeof lib_service_auth;
   "lib/servingEligibility": typeof lib_servingEligibility;
   "lib/validators": typeof lib_validators;

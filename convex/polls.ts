@@ -3,19 +3,15 @@ import { v } from "convex/values";
 
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import {
+  isSamePollText,
+  selectPendingPollCandidate,
+} from "./lib/pollMatching";
 import { inboundClaimResult } from "./lib/validators";
 
 const BURST_DEBOUNCE_MS = 500;
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const NEWER_INBOUND_TOLERANCE_MS = 2_000;
-
-function normalize(value: string): string {
-  return value
-    .trim()
-    .replace(/\s+·\s+[a-z0-9]{1,12}$/iu, "")
-    .replace(/\s+/g, " ")
-    .toLocaleLowerCase("en-US");
-}
 
 export const claimVote = internalMutation({
   args: {
@@ -80,8 +76,6 @@ export const claimVote = internalMutation({
       throw new Error("POLL_SELECTION_SUPERSEDED");
     }
 
-    const title = normalize(args.pollTitle);
-    const selected = normalize(args.selectedOption);
     let poll = args.providerPollId === undefined
       ? null
       : await ctx.db
@@ -95,7 +89,9 @@ export const claimVote = internalMutation({
       poll !== null &&
       (poll.threadId !== thread._id ||
         poll.status !== "pending" ||
-        !poll.options.some((option) => normalize(option) === selected))
+        !poll.options.some((option) =>
+          isSamePollText(option, args.selectedOption),
+        ))
     ) {
       poll = null;
     }
@@ -108,41 +104,21 @@ export const claimVote = internalMutation({
         )
         .order("desc")
         .take(6);
-      if (args.providerPollId !== undefined) {
-        for (const candidate of pending) {
-          if (
-            candidate.providerPollId !== undefined ||
-            !candidate.options.some((option) => normalize(option) === selected)
-          ) {
-            continue;
-          }
-          const delivery = await ctx.db
-            .query("outboundDeliveries")
-            .withIndex("by_turn_stage", (q) =>
-              q.eq("turnId", candidate.turnId).eq("stage", "poll"),
-            )
-            .unique();
-          if (delivery?.providerMessageId === args.providerPollId) {
-            poll = candidate;
-            break;
-          }
-        }
-      }
-      // Legacy clarification polls sent before provider GUID persistence may
-      // fall back once to title matching. Semantic decision/check-in polls
-      // always fail closed unless their exact provider GUID matches.
-      poll ??= pending.find(
-          (candidate) =>
-            candidate.providerPollId === undefined &&
-            candidate.purpose === undefined &&
-            normalize(candidate.question) === title &&
-            candidate.options.some((option) => normalize(option) === selected),
-        ) ?? null;
+      poll = selectPendingPollCandidate({
+        pending,
+        pollTitle: args.pollTitle,
+        ...(args.providerPollId === undefined
+          ? {}
+          : { providerPollId: args.providerPollId }),
+        selectedOption: args.selectedOption,
+      });
     }
     if (poll === null || poll.expiresAtMs <= args.receivedAtMs) {
       throw new Error("POLL_SELECTION_NOT_PENDING");
     }
-    const canonicalOption = poll.options.find((option) => normalize(option) === selected);
+    const canonicalOption = poll.options.find(
+      (option) => isSamePollText(option, args.selectedOption),
+    );
     if (canonicalOption === undefined) throw new Error("POLL_OPTION_NOT_FOUND");
 
     await ctx.db.patch(poll._id, {

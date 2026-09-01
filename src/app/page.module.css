@@ -1,0 +1,125 @@
+.page {
+  min-height: 100vh;
+  width: 100%;
+  background:
+    radial-gradient(circle at 84% 12%, rgba(99, 214, 199, 0.18), transparent 30rem),
+    radial-gradient(circle at 4% 86%, rgba(245, 182, 66, 0.12), transparent 28rem),
+    var(--background);
+}
+
+.main {
+  width: min(100%, 76rem);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 3.5rem clamp(1.25rem, 6vw, 6rem) 2rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.eyebrow {
+  color: var(--ocean);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.18em;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: clamp(1.25rem, 4vw, 3rem);
+  margin: clamp(4rem, 13vh, 8rem) 0 3.5rem;
+}
+
+.mark {
+  width: clamp(5.25rem, 12vw, 8rem);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 38% 62% 57% 43% / 45% 42% 58% 55%;
+  background: linear-gradient(145deg, var(--accent), #e97445);
+  color: #071714;
+  font-family: Georgia, serif;
+  font-size: clamp(3rem, 8vw, 5rem);
+  font-style: italic;
+  box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.25);
+}
+
+.hero h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(3.2rem, 9vw, 7.4rem);
+  font-weight: 500;
+  line-height: 0.9;
+  letter-spacing: -0.06em;
+}
+
+.lede {
+  max-width: 42rem;
+  margin-top: 1.5rem;
+  color: var(--muted);
+  font-size: clamp(1.05rem, 2.2vw, 1.4rem);
+  line-height: 1.55;
+}
+
+.card {
+  width: min(100%, 42rem);
+  margin-left: auto;
+  padding: clamp(1.25rem, 3vw, 2rem);
+  border: 1px solid var(--border);
+  border-radius: 1.5rem;
+  background: var(--panel);
+  backdrop-filter: blur(1.5rem);
+  box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.22);
+}
+
+.you,
+.coast {
+  margin: 0.8rem 0 0.45rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.13em;
+}
+
+.coast {
+  color: var(--accent);
+}
+
+.bubble {
+  max-width: 31rem;
+  margin-left: auto;
+  padding: 0.85rem 1rem;
+  border-radius: 1.15rem 1.15rem 0.3rem 1.15rem;
+  background: #2869f0;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.reply {
+  margin: 0;
+  border-radius: 1.15rem 1.15rem 1.15rem 0.3rem;
+  background: #253a35;
+}
+
+.footer {
+  margin-top: auto;
+  padding-top: 4rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.footer a {
+  color: var(--ocean);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+@media (max-width: 640px) {
+  .main { padding-top: 2rem; }
+  .hero { grid-template-columns: 1fr; margin-top: 3.5rem; }
+  .footer { flex-direction: column; }
+}

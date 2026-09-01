@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "regions": ["sfo1"],
+  "functions": {
+    "src/app/api/imessage/webhook/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

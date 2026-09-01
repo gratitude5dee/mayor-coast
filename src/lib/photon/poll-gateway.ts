@@ -1,0 +1,323 @@
+import type { iMessageAdapter } from "@photon-ai/chat-adapter-imessage";
+import type { StateAdapter } from "chat";
+
+import type { CoastApplicationService } from "./contracts";
+import {
+  getAdvancedEntries,
+  type AdvancedEntry,
+  type AdvancedPollEvent,
+} from "./advanced-client";
+import {
+  extractProviderPollId,
+  handleNativePollVote,
+  type NativePollVote,
+} from "./poll-webhook";
+
+const GATEWAY_DELIVERY_SCOPE = "photon-live-gateway";
+const INITIAL_CATCH_UP_MAX_AGE_MS = 30 * 60 * 1_000;
+const CURSOR_KEY_PREFIX = "coast:photon:poll-cursor:v1";
+
+type RecordValue = Record<string, unknown>;
+
+type PollGatewayDependencies = {
+  adapter: Pick<
+    iMessageAdapter,
+    "encodeThreadId" | "isDM" | "startTyping"
+  >;
+  application: CoastApplicationService;
+  messages: AsyncIterable<unknown>;
+  signal: AbortSignal;
+};
+
+type AdvancedPollGatewayDependencies = {
+  adapter: iMessageAdapter;
+  application: CoastApplicationService;
+  entries?: readonly AdvancedEntry[];
+  now?: () => number;
+  signal: AbortSignal;
+  state: Pick<StateAdapter, "get" | "set">;
+};
+
+/**
+ * Consume raw Advanced iMessage poll events instead of Spectrum's synthesized
+ * `poll_option` record. Photon can return an empty poll title for an otherwise
+ * valid poll; Spectrum 10 rejects that record before application code sees it.
+ * The raw event still has the durable poll GUID and option identifier, which
+ * are sufficient to resolve the stored option and continue the conversation.
+ */
+export async function consumeAdvancedNativePollVotes(
+  dependencies: AdvancedPollGatewayDependencies,
+): Promise<void> {
+  const entries = dependencies.entries ?? getAdvancedEntries(dependencies.adapter);
+  await Promise.all(
+    entries.map((entry, index) =>
+      consumeAdvancedEntry(dependencies, entry, index),
+    ),
+  );
+}
+
+async function consumeAdvancedEntry(
+  dependencies: AdvancedPollGatewayDependencies,
+  entry: AdvancedEntry,
+  index: number,
+): Promise<void> {
+  const cursorKey = `${CURSOR_KEY_PREFIX}:${index}`;
+  const storedCursor = await dependencies.state.get<number>(cursorKey);
+  let cursor =
+    typeof storedCursor === "number" &&
+    Number.isSafeInteger(storedCursor) &&
+    storedCursor >= 0
+      ? storedCursor
+      : undefined;
+  const now = dependencies.now ?? Date.now;
+
+  const catchUp = entry.client.events.catchUp(cursor);
+  try {
+    for await (const event of catchUp) {
+      if (dependencies.signal.aborted) return;
+      if (isCatchUpComplete(event)) {
+        cursor = Math.max(cursor ?? 0, event.headSequence);
+        await dependencies.state.set(cursorKey, cursor);
+        break;
+      }
+      if (
+        isAdvancedPollEvent(event) &&
+        (storedCursor !== null ||
+          event.occurredAt.getTime() >= now() - INITIAL_CATCH_UP_MAX_AGE_MS)
+      ) {
+        await handleAdvancedPollEvent(dependencies, entry, event);
+      }
+      const sequence = eventSequence(event);
+      if (sequence !== null) cursor = Math.max(cursor ?? 0, sequence);
+    }
+  } finally {
+    await catchUp.close?.().catch(() => undefined);
+  }
+
+  if (dependencies.signal.aborted) return;
+  const live = entry.client.polls.subscribeEvents();
+  const iterator = live[Symbol.asyncIterator]();
+  try {
+    while (!dependencies.signal.aborted) {
+      const result = await nextUntilAbort(iterator, dependencies.signal);
+      if (result === null || result.done) break;
+      if (result.value.sequence <= (cursor ?? -1)) continue;
+      await handleAdvancedPollEvent(dependencies, entry, result.value);
+      cursor = result.value.sequence;
+      await dependencies.state.set(cursorKey, cursor);
+    }
+  } finally {
+    await iterator.return?.().catch(() => undefined);
+    await live.close?.().catch(() => undefined);
+  }
+}
+
+function isCatchUpComplete(
+  value: unknown,
+): value is { headSequence: number; type: "catchup.complete" } {
+  const item = record(value);
+  return (
+    item?.type === "catchup.complete" &&
+    typeof item.headSequence === "number" &&
+    Number.isSafeInteger(item.headSequence) &&
+    item.headSequence >= 0
+  );
+}
+
+function isAdvancedPollEvent(value: unknown): value is AdvancedPollEvent {
+  const item = record(value);
+  const delta = item === null ? null : record(item.delta);
+  return (
+    item?.type === "poll.changed" &&
+    typeof item.chatGuid === "string" &&
+    typeof item.pollMessageGuid === "string" &&
+    typeof item.sequence === "number" &&
+    typeof item.isFromMe === "boolean" &&
+    item.occurredAt instanceof Date &&
+    delta !== null &&
+    typeof delta.type === "string"
+  );
+}
+
+function eventSequence(value: unknown): number | null {
+  const sequence = record(value)?.sequence;
+  return typeof sequence === "number" && Number.isSafeInteger(sequence)
+    ? sequence
+    : null;
+}
+
+async function handleAdvancedPollEvent(
+  dependencies: AdvancedPollGatewayDependencies,
+  entry: AdvancedEntry,
+  event: AdvancedPollEvent,
+): Promise<void> {
+  if (
+    event.isFromMe ||
+    event.delta.type !== "voted" ||
+    typeof event.actor?.address !== "string"
+  ) {
+    return;
+  }
+  const threadId = dependencies.adapter.encodeThreadId({
+    chatGuid: event.chatGuid,
+    phone: entry.phone,
+  });
+  if (!dependencies.adapter.isDM(threadId)) return;
+
+  const optionIdentifier = event.delta.optionIdentifier;
+  const poll = await entry.client.polls.get(event.pollMessageGuid);
+  const option = poll.options.find(
+    (candidate) =>
+      candidate.optionIdentifier === optionIdentifier,
+  );
+  if (!option?.text.trim()) return;
+
+  const receivedAtMs = event.occurredAt.getTime();
+  const providerMessageId = [
+    event.pollMessageGuid,
+    event.actor.address,
+    optionIdentifier,
+    "selected",
+    receivedAtMs,
+  ].join(":");
+
+  await handleNativePollVote({
+    adapter: dependencies.adapter,
+    application: dependencies.application,
+    deliveryScope: GATEWAY_DELIVERY_SCOPE,
+    markAsRead: async () => {
+      await entry.client.chats.markRead(event.chatGuid);
+    },
+    vote: {
+      optionLabel: option.text,
+      pollTitle: poll.title,
+      providerMessageId,
+      providerPollId: event.pollMessageGuid,
+      receivedAtMs,
+      senderAddress: event.actor.address,
+      threadId,
+    },
+  });
+}
+
+/**
+ * Spectrum Cloud webhooks currently omit native poll changes, so the live
+ * Spectrum stream is the authoritative companion intake for `poll_option`.
+ * Ordinary messages remain on the signed webhook path. Every vote is still
+ * claimed atomically in Convex before it can produce a turn.
+ */
+export async function consumeNativePollVotes(
+  dependencies: PollGatewayDependencies,
+): Promise<void> {
+  const iterator = dependencies.messages[Symbol.asyncIterator]();
+  try {
+    while (!dependencies.signal.aborted) {
+      const result = await nextUntilAbort(iterator, dependencies.signal);
+      if (result === null || result.done) break;
+      const parsed = parseNativePollVoteStream(result.value, dependencies.adapter);
+      if (parsed === null) continue;
+
+      await handleNativePollVote({
+        adapter: dependencies.adapter,
+        application: dependencies.application,
+        deliveryScope: GATEWAY_DELIVERY_SCOPE,
+        markAsRead: parsed.markAsRead,
+        vote: parsed.vote,
+      });
+    }
+  } finally {
+    await iterator.return?.().catch(() => undefined);
+  }
+}
+
+export function parseNativePollVoteStream(
+  value: unknown,
+  adapter: Pick<iMessageAdapter, "encodeThreadId" | "isDM">,
+): { markAsRead: () => Promise<void>; vote: NativePollVote } | null {
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const space = record(value[0]);
+  const message = record(value[1]);
+  if (space === null || message === null) return null;
+
+  const content = record(message.content);
+  const poll = content === null ? null : record(content.poll);
+  const option = content === null ? null : record(content.option);
+  const sender = record(message.sender);
+  if (
+    content?.type !== "poll_option" ||
+    content.selected !== true ||
+    poll === null ||
+    option === null ||
+    typeof poll.title !== "string" ||
+    typeof option.title !== "string" ||
+    typeof message.id !== "string" ||
+    typeof sender?.id !== "string" ||
+    typeof space.id !== "string" ||
+    typeof message.read !== "function"
+  ) {
+    return null;
+  }
+
+  const threadId = adapter.encodeThreadId({
+    chatGuid: space.id,
+    ...(typeof space.phone === "string" ? { phone: space.phone } : {}),
+  });
+  if (!adapter.isDM(threadId)) return null;
+
+  const timestamp = message.timestamp;
+  const receivedAtMs =
+    timestamp instanceof Date
+      ? timestamp.getTime()
+      : typeof timestamp === "string"
+        ? Date.parse(timestamp)
+        : Number.NaN;
+
+  return {
+    markAsRead: async () => {
+      await (message.read as () => Promise<void>)();
+    },
+    vote: {
+      optionLabel: option.title,
+      pollTitle: poll.title,
+      ...(extractProviderPollId(message.id, sender.id) === null
+        ? {}
+        : {
+            providerPollId: extractProviderPollId(
+              message.id,
+              sender.id,
+            ) as string,
+          }),
+      providerMessageId: message.id,
+      receivedAtMs: Number.isFinite(receivedAtMs) ? receivedAtMs : Date.now(),
+      senderAddress: sender.id,
+      threadId,
+    },
+  };
+}
+
+async function nextUntilAbort<T>(
+  iterator: AsyncIterator<T>,
+  signal: AbortSignal,
+): Promise<IteratorResult<T> | null> {
+  if (signal.aborted) return null;
+  return await new Promise<IteratorResult<T> | null>((resolve, reject) => {
+    const onAbort = () => resolve(null);
+    signal.addEventListener("abort", onAbort, { once: true });
+    iterator.next().then(
+      (result) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function record(value: unknown): RecordValue | null {
+  return typeof value === "object" && value !== null
+    ? (value as RecordValue)
+    : null;
+}

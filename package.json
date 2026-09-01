@@ -1,0 +1,48 @@
+{
+  "name": "mayor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "convex:dev": "convex dev",
+    "convex:deploy": "convex deploy",
+    "snapshot:verify": "node --import tsx scripts/verify-snapshot.ts",
+    "snapshot:import": "node --import tsx scripts/import-snapshot.ts"
+  },
+  "dependencies": {
+    "@photon-ai/chat-adapter-imessage": "3.2.0",
+    "chat": "^4",
+    "convex": "^1.45.0",
+    "h3-js": "^4.1.0",
+    "next": "16.3.4",
+    "openai": "^7.8.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.11",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.4",
+    "tsx": "^4.23.13",
+    "typescript": "^5",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^4.1.11"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

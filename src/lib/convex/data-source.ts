@@ -59,6 +59,8 @@ export class ConvexCoastDataSource implements CoastDataSource {
       ...(input.priceBands.length === 1
         ? { priceBand: input.priceBands[0] }
         : {}),
+      ...(input.startAtMs === null ? {} : { startAtMs: input.startAtMs }),
+      ...(input.endAtMs === null ? {} : { endAtMs: input.endAtMs }),
     });
 
     const items = response.results

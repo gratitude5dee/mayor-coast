@@ -10,7 +10,7 @@ import {
 } from "./lib/pollMatching";
 import { inboundClaimResult } from "./lib/validators";
 
-const BURST_DEBOUNCE_MS = 500;
+const BURST_DEBOUNCE_MS = 150;
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const NEWER_INBOUND_TOLERANCE_MS = 2_000;
 
@@ -152,6 +152,7 @@ export const claimVote = internalMutation({
       bodyExpiresAtMs: args.receivedAtMs + RAW_TEXT_RETENTION_MS,
       createdAtMs: args.receivedAtMs,
     });
+    const sourceTurn = await ctx.db.get(poll.turnId);
     const turnId = await ctx.db.insert("coastTurns", {
       userId: user._id,
       threadId: thread._id,
@@ -159,6 +160,7 @@ export const claimVote = internalMutation({
       revision: 1,
       messageIds: [messageId],
       carryForwardTurnIds: [poll.turnId],
+      clarificationDepth: Math.min(2, (sourceTurn?.clarificationDepth ?? 0) + 1),
       scheduledForMs: args.receivedAtMs + BURST_DEBOUNCE_MS,
       attemptCount: 0,
       createdAtMs: args.receivedAtMs,

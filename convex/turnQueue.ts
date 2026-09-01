@@ -18,6 +18,7 @@ const MAX_PREFERENCES_PER_TURN = 10;
 const MAX_CONTEXT_MESSAGES = 20;
 const MAX_CONTEXT_PREFERENCES = 50;
 const MAX_GENERATION_ATTEMPTS = 3;
+const AGENT_RUNTIME_DEADLINE_MS = 2_600;
 const MAX_DELIVERY_ATTEMPTS = 5;
 const POLL_TTL_MS = 24 * 60 * 60 * 1_000;
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -43,11 +44,14 @@ type RuntimeTurnPlan = {
     source: "explicit" | "inferred";
   }>;
   provenanceIds: string[];
-  modelRoute: "luna_low" | "terra_low";
+  modelRoute: "luna_high_fast" | "terra_low";
   routeReasons: string[];
   modelSteps: number;
   toolCalls: number;
   retrievalMode: "observed" | "inferred_fallback" | "none";
+  generationKind: "model" | "deterministic" | "deadline_fallback";
+  elapsedMs: number;
+  serviceTier: string | null;
   nextAction?:
     | { type: "none" }
     | {
@@ -125,7 +129,7 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
   if (!Array.isArray(routeReasons) || !routeReasons.every((reason) => typeof reason === "string")) {
     throw new Error("INVALID_PLAN_ROUTE_REASONS");
   }
-  if (modelRoute !== "luna_low" && modelRoute !== "terra_low") {
+  if (modelRoute !== "luna_high_fast" && modelRoute !== "terra_low") {
     throw new Error("INVALID_PLAN_MODEL_ROUTE");
   }
   if (
@@ -138,7 +142,7 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
   if (
     typeof modelSteps !== "number" ||
     !Number.isInteger(modelSteps) ||
-    modelSteps < 1 ||
+    modelSteps < 0 ||
     modelSteps > MAX_MODEL_STEPS ||
     typeof toolCalls !== "number" ||
     !Number.isInteger(toolCalls) ||
@@ -146,6 +150,21 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
     toolCalls > MAX_TOOL_CALLS
   ) {
     throw new Error("INVALID_PLAN_BUDGET");
+  }
+  const generationKind = plan.generationKind;
+  const elapsedMs = plan.elapsedMs;
+  const serviceTier = plan.serviceTier;
+  if (
+    (generationKind !== "model" &&
+      generationKind !== "deterministic" &&
+      generationKind !== "deadline_fallback") ||
+    typeof elapsedMs !== "number" ||
+    !Number.isInteger(elapsedMs) ||
+    elapsedMs < 0 ||
+    elapsedMs > 10_000 ||
+    (serviceTier !== null && typeof serviceTier !== "string")
+  ) {
+    throw new Error("INVALID_PLAN_LATENCY_METADATA");
   }
 
   let normalizedPoll: RuntimeTurnPlan["poll"] = null;
@@ -203,6 +222,9 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
     modelSteps,
     toolCalls,
     retrievalMode,
+    generationKind,
+    elapsedMs,
+    serviceTier: serviceTier === null ? null : serviceTier.slice(0, 80),
     ...(normalizedNextAction === undefined ? {} : { nextAction: normalizedNextAction }),
   };
 }
@@ -285,6 +307,7 @@ export const getGenerationContext = internalQuery({
         }),
       ),
       carryForwardTurnIds: v.array(v.id("coastTurns")),
+      clarificationDepth: v.number(),
     }),
     v.null(),
   ),
@@ -324,6 +347,7 @@ export const getGenerationContext = internalQuery({
         source: preference.source,
       })),
       carryForwardTurnIds: turn.carryForwardTurnIds,
+      clarificationDepth: Math.max(0, Math.min(2, turn.clarificationDepth ?? 0)),
     };
   },
 });
@@ -371,9 +395,10 @@ export const beginGeneration = internalAction({
           threadId: context.threadId,
           messages: context.messages,
           preferences: context.preferences,
+          clarificationDepth: context.clarificationDepth,
           limits: { modelSteps: MAX_MODEL_STEPS, toolCalls: MAX_TOOL_CALLS },
         }),
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(AGENT_RUNTIME_DEADLINE_MS),
       });
       if (!response.ok) throw new Error(`AGENT_RUNTIME_HTTP_${response.status}`);
       const plan = parseRuntimePlan(await response.json());
@@ -415,6 +440,9 @@ export const persistPlan = internalMutation({
       args.plan.preferenceUpdates.length > MAX_PREFERENCES_PER_TURN
     ) {
       return false;
+    }
+    if (args.plan.poll !== null && (turn.clarificationDepth ?? 0) >= 2) {
+      throw new Error("CLARIFICATION_DEPTH_EXHAUSTED");
     }
     if (
       args.plan.poll !== null &&
@@ -556,6 +584,14 @@ export const persistPlan = internalMutation({
       planPersistedAtMs: args.nowMs,
       updatedAtMs: args.nowMs,
       lastErrorCode: undefined,
+      generationElapsedMs: args.plan.elapsedMs ?? 0,
+      generationKind: args.plan.generationKind ?? "deterministic",
+      ...(args.plan.serviceTier === undefined || args.plan.serviceTier === null
+        ? {}
+        : { actualServiceTier: args.plan.serviceTier }),
+      ...(args.plan.generationKind === "deadline_fallback"
+        ? { deadlineFallbackReason: "planning_deadline_or_fast_unavailable" }
+        : {}),
     });
     await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId: turn._id });
     return true;
@@ -591,6 +627,9 @@ export const recordGenerationFailure = internalMutation({
       userId: turn.userId,
       threadId: turn.threadId,
       turnId: turn._id,
+      ...(turn.generationStartedAtMs === undefined
+        ? {}
+        : { elapsedMs: Math.max(0, args.nowMs - turn.generationStartedAtMs) }),
       createdAtMs: args.nowMs,
     });
     if (!terminal) {

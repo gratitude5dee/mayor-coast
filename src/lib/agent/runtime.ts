@@ -41,6 +41,8 @@ export interface AgentRunInput {
   /** Current-request constraint kinds only; saved preferences belong above. */
   explicitConstraints?: readonly string[];
   retrievalQuality?: "strong" | "unknown" | "weak";
+  /** Number of native clarification answers in the current discovery cycle. */
+  clarificationDepth?: number;
   nowMs?: number;
   signal?: AbortSignal;
   /**
@@ -63,6 +65,10 @@ export interface AgentRunDiagnostics {
   rejectedToolCalls: number;
   inferredFallbackUsed: boolean;
   observedRetrievalWeak: boolean;
+  /** The provider-reported tier when a Responses call was made. */
+  serviceTier?: string;
+  /** A deadline fallback is intentionally not followed by another poll. */
+  deterministicFallback?: boolean;
 }
 
 export interface AgentRunResult {
@@ -128,6 +134,7 @@ export function buildAgentContextMessage(input: {
   isFirstTurn?: boolean;
   savedPreferences?: readonly AgentSavedPreference[];
   priorSelections?: readonly AgentPriorSelectionSet[];
+  clarificationDepth?: number;
 }): AgentConversationMessage {
   const savedPreferences = (input.savedPreferences ?? [])
     .slice(0, CONTEXT_PREFERENCE_LIMIT)
@@ -156,6 +163,7 @@ export function buildAgentContextMessage(input: {
       JSON.stringify({
         kind: "coast_application_context_v1",
         isFirstTurn: input.isFirstTurn ?? false,
+        clarificationDepth: Math.max(0, Math.min(2, input.clarificationDepth ?? 0)),
         savedPreferences,
         priorSelections,
       }),

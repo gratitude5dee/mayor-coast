@@ -58,7 +58,7 @@ export async function handlePhotonWebhook(
       waitUntil: (task) => adapterTasks.push(task),
     }),
   );
-  if (!response.ok || adapterTasks.length === 0) return response;
+  if (!response.ok) return response;
 
   const adapterResults = await Promise.allSettled(adapterTasks);
   const claimResults = await Promise.allSettled(context.criticalTasks);

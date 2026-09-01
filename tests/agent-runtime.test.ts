@@ -8,6 +8,7 @@ import {
 import { buildAgentContextMessage } from "../src/lib/agent/runtime";
 import { COAST_RESPONSE_TOOLS } from "../src/lib/agent/tools";
 import { LUNA_MODEL, TERRA_MODEL } from "../src/lib/agent/model-routing";
+import { currentSanFranciscoDay } from "../src/lib/agent/today-events";
 import type {
   ExperienceRecord,
   PreferenceUpdate,
@@ -71,7 +72,14 @@ function responsesQueue(...responses: never[]) {
 }
 
 describe("OpenAIResponsesRuntime", () => {
-  it("uses raw Responses with store:false and Luna/low by default", async () => {
+  it("uses one exact America/Los_Angeles calendar day for today events", () => {
+    expect(currentSanFranciscoDay(Date.parse("2026-09-01T18:00:00-07:00"))).toEqual({
+      startAtMs: Date.parse("2026-09-01T00:00:00-07:00"),
+      endAtMs: Date.parse("2026-09-02T00:00:00-07:00"),
+    });
+  });
+
+  it("uses raw Responses with Luna/high on the Fast tier by default", async () => {
     const responses = responsesQueue(
       fakeResponse({ outputParsed: EMPTY_PLAN }),
     );
@@ -91,7 +99,8 @@ describe("OpenAIResponsesRuntime", () => {
     const request = responses.parse.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(request.model).toBe(LUNA_MODEL);
     expect(request.store).toBe(false);
-    expect(request.reasoning).toEqual({ effort: "low" });
+    expect(request.reasoning).toEqual({ effort: "high" });
+    expect(request.service_tier).toBe("fast");
     expect(request.tools).toHaveLength(4);
   });
 
@@ -150,9 +159,83 @@ describe("OpenAIResponsesRuntime", () => {
     expect(responses.parse).toHaveBeenCalledTimes(2);
     expect(responses.parse.mock.calls[0]?.[0]).toMatchObject({ model: LUNA_MODEL });
     expect(responses.parse.mock.calls[1]?.[0]).toMatchObject({ model: TERRA_MODEL });
+    expect(responses.parse.mock.calls[1]?.[0]).toMatchObject({
+      reasoning: { effort: "low" },
+    });
+    expect(responses.parse.mock.calls[1]?.[0]).not.toHaveProperty("service_tier");
     expect(result.diagnostics.routeReasons).toContain(
       "failed_luna_structured_output",
     );
+  });
+
+  it("retrieves only current-day SF event cards for a tonight typo without polling the model", async () => {
+    const responses = responsesQueue();
+    const event: ExperienceRecord = {
+      ...place("event:tonight"),
+      entityType: "event",
+      title: "Tonight's Source-Backed Show",
+      startAtMs: Date.parse("2026-09-02T03:00:00Z"),
+    };
+    const source = dataSource();
+    source.searchExperiences = vi.fn(async () => ({
+      items: [event],
+      weak: false,
+    }));
+    const runtime = new OpenAIResponsesRuntime({
+      responses: responses.api,
+      dataSource: source,
+    });
+
+    const result = await runtime.run({
+      message: "What events are going on toight?",
+      pseudonymousUserId: "sender_hash",
+      nowMs: Date.parse("2026-09-01T18:00:00-07:00"),
+    });
+
+    expect(responses.parse).not.toHaveBeenCalled();
+    expect(source.searchExperiences).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "events",
+        entityType: "event",
+        limit: 5,
+        matchMode: "observed",
+      }),
+    );
+    expect(result.plan.poll).toBeNull();
+    expect(result.plan.selectedExternalIds).toEqual(["event:tonight"]);
+    expect(result.experiences.every((item) => item.entityType === "event")).toBe(true);
+  });
+
+  it("broadens deterministically after two poll answers instead of creating a third poll", async () => {
+    const responses = responsesQueue();
+    const source = dataSource();
+    source.searchExperiences = vi.fn(async () => ({
+      items: [place("place:mission-dinner")],
+      weak: false,
+    }));
+    const runtime = new OpenAIResponsesRuntime({
+      responses: responses.api,
+      dataSource: source,
+    });
+
+    const result = await runtime.run({
+      message: "Mission",
+      pseudonymousUserId: "sender_hash",
+      clarificationDepth: 2,
+      recentMessages: [{ role: "user", content: "Food tonight" }],
+      nowMs: Date.parse("2026-09-01T18:00:00-07:00"),
+    });
+
+    expect(responses.parse).not.toHaveBeenCalled();
+    expect(source.searchExperiences).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "dinner",
+        entityType: "place",
+        neighborhoods: ["Mission"],
+      }),
+    );
+    expect(result.plan.poll).toBeNull();
+    expect(result.plan.selectedExternalIds).toEqual(["place:mission-dinner"]);
   });
 
   it("stages preference tools without writing before plan persistence", async () => {

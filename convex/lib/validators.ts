@@ -293,7 +293,9 @@ export const semanticPollOption = v.object({
 });
 
 export const modelRoute = v.union(
+  // Retained for already-persisted deterministic location/control turns.
   v.literal("luna_low"),
+  v.literal("luna_high_fast"),
   v.literal("terra_low"),
 );
 
@@ -336,6 +338,15 @@ export const turnPlan = v.object({
       }),
     ),
   ),
+  generationKind: v.optional(
+    v.union(
+      v.literal("model"),
+      v.literal("deterministic"),
+      v.literal("deadline_fallback"),
+    ),
+  ),
+  elapsedMs: v.optional(v.number()),
+  serviceTier: v.optional(v.union(v.string(), v.null())),
 });
 
 export const experienceResult = v.object({

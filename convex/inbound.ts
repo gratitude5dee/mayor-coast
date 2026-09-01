@@ -13,7 +13,7 @@ import {
 import { inboundClaimResult } from "./lib/validators";
 
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-const BURST_DEBOUNCE_MS = 500;
+const BURST_DEBOUNCE_MS = 150;
 const LOCATION_REQUEST_TTL_MS = 2 * 60 * 1_000;
 
 function detectCommand(
@@ -688,6 +688,9 @@ export const claimDelivery = internalMutation({
           revision: 1,
           messageIds: [...new Set(messageIds)],
           carryForwardTurnIds: [...new Set(carryForwardTurnIds)],
+          // A typed free-form message is a fresh discovery request. Poll votes
+          // continue their lineage through convex/polls.ts instead.
+          clarificationDepth: 0,
           scheduledForMs,
           attemptCount: 0,
           createdAtMs: args.receivedAtMs,

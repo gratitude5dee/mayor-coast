@@ -96,4 +96,24 @@ describe("native choice recovery", () => {
     expect(modelPoll.poll?.question).toBe("Budget?");
     expect(command).toEqual(emptyPlan);
   });
+
+  it("never creates a third clarification poll in the same discovery cycle", () => {
+    const result = withNativeChoiceRecovery({
+      plan: {
+        ...emptyPlan,
+        poll: {
+          question: "Another question?",
+          options: ["Yes", "No"],
+          multiple: false,
+        },
+      },
+      command: null,
+      latestMessage: "Mission",
+      recentMessages: [],
+      clarificationDepth: 2,
+    });
+
+    expect(result.poll).toBeNull();
+    expect(result.responseText).toContain("widened the verified search");
+  });
 });

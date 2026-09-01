@@ -18,7 +18,10 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 5;
+
+/** Leave a little time for the signed caller to persist and deliver a fallback. */
+const PLANNING_DEADLINE_MS = 2_400;
 
 const messageSchema = z
   .object({
@@ -64,6 +67,7 @@ const requestSchema = z
           .strict(),
       )
       .max(50),
+    clarificationDepth: z.number().int().min(0).max(2).optional(),
     limits: z
       .object({
         modelSteps: z.literal(2),
@@ -72,6 +76,30 @@ const requestSchema = z
       .strict(),
   })
   .strict();
+
+function deadlineFallback(input: {
+  isFirstTurn: boolean;
+  elapsedMs: number;
+}): Response {
+  return privateJson({
+    responseText: withCoastFirstTurnIntro(
+      "I hit a brief delay pulling the verified guide. Send that move again and I’ll keep it tight.",
+      input.isFirstTurn,
+    ),
+    selectedExternalIds: [],
+    poll: null,
+    preferenceUpdates: [],
+    provenanceIds: [],
+    modelRoute: "luna_high_fast",
+    routeReasons: ["planning_deadline_fallback"],
+    modelSteps: 0,
+    toolCalls: 0,
+    retrievalMode: "none",
+    generationKind: "deadline_fallback",
+    elapsedMs: input.elapsedMs,
+    serviceTier: null,
+  });
+}
 
 export async function POST(request: Request): Promise<Response> {
   let env;
@@ -98,11 +126,17 @@ export async function POST(request: Request): Promise<Response> {
     return privateJson({ error: "missing_inbound_message" }, { status: 400 });
   }
 
+  const startedAtMs = Date.now();
+  const deadlineSignal = AbortSignal.any([
+    request.signal,
+    AbortSignal.timeout(PLANNING_DEADLINE_MS),
+  ]);
   try {
     const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    const nowMs = Date.now();
     const dataSource = new ConvexCoastDataSource(
       getConvexHttpClient(env.CONVEX_URL),
-      Date.now(),
+      nowMs,
     );
     const agent = new OpenAIResponsesAgentRuntime({
       responses: openai.responses,
@@ -136,6 +170,7 @@ export async function POST(request: Request): Promise<Response> {
       isFirstTurn,
       savedPreferences,
       priorSelections: input.priorSelections ?? [],
+      clarificationDepth: input.clarificationDepth ?? 0,
     });
     const result = await agent.run({
       message: latest.body,
@@ -145,15 +180,20 @@ export async function POST(request: Request): Promise<Response> {
       savedPreferences,
       priorSelections: input.priorSelections ?? [],
       retrievalQuality: "unknown",
-      nowMs: Date.now(),
-      signal: request.signal,
+      clarificationDepth: input.clarificationDepth ?? 0,
+      nowMs,
+      signal: deadlineSignal,
     });
     const plan = withNativeChoiceRecovery({
       plan: result.plan,
       command: result.command,
       latestMessage: latest.body,
       recentMessages: input.messages,
+      clarificationDepth: input.clarificationDepth ?? 0,
+      suppressRecovery: result.diagnostics.deterministicFallback ?? false,
     });
+
+    const elapsedMs = Date.now() - startedAtMs;
 
     return privateJson({
       responseText: withCoastFirstTurnIntro(
@@ -178,7 +218,7 @@ export async function POST(request: Request): Promise<Response> {
       modelRoute:
         result.diagnostics.model === "gpt-5.6-terra"
           ? "terra_low"
-          : "luna_low",
+          : "luna_high_fast",
       routeReasons: result.diagnostics.routeReasons,
       modelSteps: result.diagnostics.modelSteps,
       toolCalls: result.diagnostics.toolCalls,
@@ -187,8 +227,17 @@ export async function POST(request: Request): Promise<Response> {
         : result.experiences.length > 0
           ? "observed"
           : "none",
+      generationKind:
+        result.diagnostics.model === "deterministic" ? "deterministic" : "model",
+      elapsedMs,
+      serviceTier: result.diagnostics.serviceTier ?? null,
     });
   } catch {
-    return privateJson({ error: "generation_failed" }, { status: 502 });
+    return deadlineFallback({
+      isFirstTurn:
+        input.isFirstTurn ??
+        !input.messages.some((message) => message.direction === "outbound"),
+      elapsedMs: Date.now() - startedAtMs,
+    });
   }
 }

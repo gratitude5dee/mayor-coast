@@ -295,11 +295,23 @@ export default defineSchema({
     revision: v.number(),
     messageIds: v.array(v.id("coastMessages")),
     carryForwardTurnIds: v.array(v.id("coastTurns")),
+    /** Clarification answers in this discovery lineage; hard-capped at two. */
+    clarificationDepth: v.optional(v.number()),
     origin: v.optional(v.union(v.literal("inbound"), v.literal("proactive"))),
     checkInId: v.optional(v.id("coastCheckIns")),
     plan: v.optional(turnPlan),
     scheduledForMs: v.number(),
     generationStartedAtMs: v.optional(v.number()),
+    generationElapsedMs: v.optional(v.number()),
+    generationKind: v.optional(
+      v.union(
+        v.literal("model"),
+        v.literal("deterministic"),
+        v.literal("deadline_fallback"),
+      ),
+    ),
+    actualServiceTier: v.optional(v.string()),
+    deadlineFallbackReason: v.optional(v.string()),
     planPersistedAtMs: v.optional(v.number()),
     sendStartedAtMs: v.optional(v.number()),
     completedAtMs: v.optional(v.number()),
@@ -520,6 +532,14 @@ export default defineSchema({
     userId: v.optional(v.id("coastUsers")),
     threadId: v.optional(v.id("coastThreads")),
     turnId: v.optional(v.id("coastTurns")),
+    elapsedMs: v.optional(v.number()),
+    generationKind: v.optional(
+      v.union(
+        v.literal("model"),
+        v.literal("deterministic"),
+        v.literal("deadline_fallback"),
+      ),
+    ),
     createdAtMs: v.number(),
   })
     .index("by_component_created", ["component", "createdAtMs"])

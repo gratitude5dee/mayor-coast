@@ -79,4 +79,31 @@ describe("ConvexCoastDataSource", () => {
     );
     expect(canonicalNeighborhood("Downtown")).toBe("Financial District/South Beach");
   });
+
+  it("forwards a bounded event time range to the indexed Convex query", async () => {
+    const query = vi.fn().mockResolvedValue({ retrievalMode: "observed", results: [] });
+    const dataSource = new ConvexCoastDataSource(
+      { query } as unknown as ConvexHttpClient,
+      Date.parse("2026-09-01T07:00:00Z"),
+    );
+    const startAtMs = Date.parse("2026-09-01T07:00:00Z");
+    const endAtMs = Date.parse("2026-09-02T07:00:00Z");
+
+    await dataSource.searchExperiences({
+      query: "events",
+      entityType: "event",
+      neighborhoods: [],
+      primaryTypes: [],
+      priceBands: [],
+      startAtMs,
+      endAtMs,
+      limit: 5,
+      matchMode: "observed",
+    });
+
+    expect(query).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ startAtMs, endAtMs, entityType: "event" }),
+    );
+  });
 });

@@ -11,6 +11,8 @@ export interface ConversationRecoveryInput {
   command: CoastCommand | null;
   latestMessage: string;
   recentMessages: readonly HistoryMessage[];
+  clarificationDepth?: number;
+  suppressRecovery?: boolean;
 }
 
 type RecoveryPoll = NonNullable<TurnPlan["poll"]>;
@@ -68,7 +70,19 @@ export function withNativeChoiceRecovery(
   input: ConversationRecoveryInput,
 ): TurnPlan {
   const { plan } = input;
+  if ((input.clarificationDepth ?? 0) >= 2) {
+    if (plan.poll === null) return plan;
+    return {
+      ...plan,
+      poll: null,
+      responseText:
+        plan.selectedExternalIds.length > 0
+          ? plan.responseText
+          : "I widened the verified search and didn’t find a clean match in this snapshot.",
+    };
+  }
   if (
+    input.suppressRecovery ||
     input.command !== null ||
     plan.poll !== null ||
     plan.selectedExternalIds.length > 0

@@ -113,6 +113,29 @@ describe("Photon webhook boundary", () => {
     expect(response.status).toBe(200);
     expect(defer).toHaveBeenCalledWith(continuation);
   });
+
+  it("continues a claimed native poll vote when the adapter has no background task", async () => {
+    const continuation = Promise.resolve();
+    const defer = vi.fn();
+    const dispatch = vi.fn(async () => {
+      registerPhotonCriticalTask(Promise.resolve());
+      registerPhotonContinuation(continuation);
+      // Some Photon native-poll deliveries do not call adapter waitUntil.
+      return new Response(null, { status: 200 });
+    });
+
+    const response = await handlePhotonWebhook(
+      new Request("https://coast.example/api/imessage/webhook", {
+        body: "{}",
+        headers: { [SPECTRUM_WEBHOOK_ID_HEADER]: "wh_native_poll" },
+        method: "POST",
+      }),
+      { dispatch, defer },
+    );
+
+    expect(response.status).toBe(200);
+    expect(defer).toHaveBeenCalledWith(continuation);
+  });
 });
 
 describe("pinned adapter signature behavior", () => {

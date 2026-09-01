@@ -42,6 +42,11 @@ import {
   type AgentRunResult,
   type AgentRuntime,
 } from "./runtime";
+import {
+  isTodayEventsRequest,
+  resolveExhaustedClarification,
+  resolveTodayEvents,
+} from "./today-events";
 
 const MAX_MODEL_STEPS = 2;
 const MAX_TOOL_CALLS = 4;
@@ -176,6 +181,23 @@ function modelName(
     : (options.lunaModel ?? route.model);
 }
 
+function modelRequestOptions(
+  route: ModelRoute,
+  options: OpenAIResponsesRuntimeOptions,
+) {
+  const isTerra = route.model === TERRA_MODEL;
+  return {
+    model: modelName(route, options),
+    reasoning: { effort: isTerra ? "low" as const : "high" as const },
+    ...(isTerra ? {} : { service_tier: "fast" as const }),
+  };
+}
+
+function serviceTierFrom(response: ParsedResponse<unknown>): string | undefined {
+  const value = (response as { service_tier?: unknown }).service_tier;
+  return typeof value === "string" ? value : undefined;
+}
+
 function baseConversation(input: AgentRunInput): ResponseInputItem[] {
   const recent = (input.recentMessages ?? []).slice(-8).map((message) => ({
     role: message.role,
@@ -275,6 +297,19 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
     }
 
     const nowMs = input.nowMs ?? Date.now();
+    if (isTodayEventsRequest(input.message)) {
+      return resolveTodayEvents({ dataSource: this.options.dataSource, nowMs });
+    }
+    if ((input.clarificationDepth ?? 0) >= 2) {
+      return resolveExhaustedClarification({
+        dataSource: this.options.dataSource,
+        nowMs,
+        message: input.message,
+        ...(input.recentMessages === undefined
+          ? {}
+          : { recentMessages: input.recentMessages }),
+      });
+    }
     let route = selectInitialModel(input);
     let modelSteps = 0;
     let toolCalls = 0;
@@ -284,12 +319,11 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
     const conversation = baseConversation({ ...input, nowMs });
 
     const first = await this.options.responses.parse({
-      model: modelName(route, this.options),
+      ...modelRequestOptions(route, this.options),
       instructions: COAST_SYSTEM_PROMPT,
       input: conversation,
       tools: [...COAST_RESPONSE_TOOLS],
       parallel_tool_calls: true,
-      reasoning: { effort: "low" },
       text: { format: TURN_PLAN_FORMAT },
       store: false,
       include: ["reasoning.encrypted_content"],
@@ -297,6 +331,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       safety_identifier: safetyIdentifier(input.pseudonymousUserId),
     }, { signal: input.signal });
     modelSteps += 1;
+    let actualServiceTier = serviceTierFrom(first);
 
     const calls = asFunctionCalls(first);
     let rawPlan = parseTurnPlan(first);
@@ -369,7 +404,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       }
 
       const continuation = await this.options.responses.parse({
-        model: modelName(route, this.options),
+        ...modelRequestOptions(route, this.options),
         instructions: COAST_SYSTEM_PROMPT,
         input: [
           ...conversation,
@@ -377,7 +412,6 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
           ...outputs,
           ...rejectedOutputs,
         ],
-        reasoning: { effort: "low" },
         text: { format: TURN_PLAN_FORMAT },
         store: false,
         include: ["reasoning.encrypted_content"],
@@ -386,13 +420,13 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       }, { signal: input.signal });
       modelSteps += 1;
       rawPlan = parseTurnPlan(continuation);
+      actualServiceTier = serviceTierFrom(continuation) ?? actualServiceTier;
     } else if (!rawPlan && route.model !== TERRA_MODEL) {
       route = escalateRoute(route, "failed_luna_structured_output");
       const repair = await this.options.responses.parse({
-        model: modelName(route, this.options),
+        ...modelRequestOptions(route, this.options),
         instructions: `${COAST_SYSTEM_PROMPT}\n\nThe prior Luna output did not validate. Return one valid coast_turn_plan object now without calling tools.`,
         input: conversation,
-        reasoning: { effort: "low" },
         text: { format: TURN_PLAN_FORMAT },
         store: false,
         include: ["reasoning.encrypted_content"],
@@ -401,6 +435,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
       }, { signal: input.signal });
       modelSteps += 1;
       rawPlan = parseTurnPlan(repair);
+      actualServiceTier = serviceTierFrom(repair) ?? actualServiceTier;
     }
 
     if (!rawPlan) {
@@ -454,6 +489,7 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
         rejectedToolCalls,
         inferredFallbackUsed: ledger.usedInferredFallback,
         observedRetrievalWeak: ledger.observedRetrievalWeak,
+        ...(actualServiceTier === undefined ? {} : { serviceTier: actualServiceTier }),
       },
     };
   }

@@ -19,6 +19,8 @@ const searchFilters = {
   neighborhoodId: v.optional(v.string()),
   primaryType: v.optional(v.string()),
   priceBand: v.optional(v.string()),
+  startAtMs: v.optional(v.number()),
+  endAtMs: v.optional(v.number()),
 };
 
 const recommendationResult = v.object({
@@ -41,6 +43,17 @@ function boundedLimit(requested: number | undefined): number {
 
 function isEligible(card: ExperienceCard, nowMs: number): boolean {
   return isServingExperienceEligible(card, nowMs);
+}
+
+function isWithinRequestedTimeRange(
+  card: ExperienceCard,
+  startAtMs: number | undefined,
+  endAtMs: number | undefined,
+): boolean {
+  const startAtUtcMs = card.inferred.startAtUtcMs;
+  if (startAtUtcMs === null) return startAtMs === undefined && endAtMs === undefined;
+  if (startAtMs !== undefined && startAtUtcMs < startAtMs) return false;
+  return endAtMs === undefined || startAtUtcMs < endAtMs;
 }
 
 type DiscoveryFallback = {
@@ -145,6 +158,20 @@ export const searchExperiences = query({
     const searchText = args.searchText.trim().slice(0, 256);
     if (!searchText) return { retrievalMode: "observed" as const, results: [] };
 
+    const startAtMs = args.startAtMs === undefined
+      ? undefined
+      : Math.floor(args.startAtMs);
+    const endAtMs = args.endAtMs === undefined
+      ? undefined
+      : Math.floor(args.endAtMs);
+    if (
+      (startAtMs !== undefined && (!Number.isFinite(startAtMs) || startAtMs < 0)) ||
+      (endAtMs !== undefined && (!Number.isFinite(endAtMs) || endAtMs < 0)) ||
+      (startAtMs !== undefined && endAtMs !== undefined && startAtMs >= endAtMs)
+    ) {
+      return { retrievalMode: "observed" as const, results: [] };
+    }
+
     const limit = boundedLimit(args.limit);
     const minimumObserved = Math.max(
       1,
@@ -174,7 +201,11 @@ export const searchExperiences = query({
       .take(MAX_CANDIDATE_READ);
 
     const observed = observedCandidates
-      .filter((card) => isEligible(card, args.nowMs))
+      .filter(
+        (card) =>
+          isEligible(card, args.nowMs) &&
+          isWithinRequestedTimeRange(card, startAtMs, endAtMs),
+      )
       .slice(0, limit)
       .map((card) => compactCard(card, "observed"));
 
@@ -192,19 +223,43 @@ export const searchExperiences = query({
       const candidates = neighborhoodId === undefined
         ? await ctx.db
             .query("sfExperienceCards")
-            .withIndex("by_kind_start", (q) =>
-              q
+            .withIndex("by_kind_start", (q) => {
+              const indexed = q
                 .eq("inferred.entityType", fallback.entityType)
-                .eq("inferred.activeStatus", "active"),
-            )
+                .eq("inferred.activeStatus", "active");
+              if (startAtMs !== undefined && endAtMs !== undefined) {
+                return indexed
+                  .gte("inferred.startAtUtcMs", startAtMs)
+                  .lt("inferred.startAtUtcMs", endAtMs);
+              }
+              if (startAtMs !== undefined) {
+                return indexed.gte("inferred.startAtUtcMs", startAtMs);
+              }
+              if (endAtMs !== undefined) {
+                return indexed.lt("inferred.startAtUtcMs", endAtMs);
+              }
+              return indexed;
+            })
             .take(MAX_CANDIDATE_READ)
         : await ctx.db
             .query("sfExperienceCards")
-            .withIndex("by_neighborhood_start", (q) =>
-              q
+            .withIndex("by_neighborhood_start", (q) => {
+              const indexed = q
                 .eq("inferred.neighborhoodId", neighborhoodId)
-                .eq("inferred.activeStatus", "active"),
-            )
+                .eq("inferred.activeStatus", "active");
+              if (startAtMs !== undefined && endAtMs !== undefined) {
+                return indexed
+                  .gte("inferred.startAtUtcMs", startAtMs)
+                  .lt("inferred.startAtUtcMs", endAtMs);
+              }
+              if (startAtMs !== undefined) {
+                return indexed.gte("inferred.startAtUtcMs", startAtMs);
+              }
+              if (endAtMs !== undefined) {
+                return indexed.lt("inferred.startAtUtcMs", endAtMs);
+              }
+              return indexed;
+            })
             .take(MAX_CANDIDATE_READ);
 
       const seen = new Set(existing.map((card) => card.externalId));
@@ -218,7 +273,8 @@ export const searchExperiences = query({
             (primaryType === undefined || card.inferred.primaryType === primaryType) &&
             (priceBand === undefined || card.inferred.priceBand === priceBand) &&
             card.observed.canonicalUrl.trim().length > 0 &&
-            isEligible(card, args.nowMs),
+            isEligible(card, args.nowMs) &&
+            isWithinRequestedTimeRange(card, startAtMs, endAtMs),
         )
         .slice(0, limit - existing.length)
         .map((card) => compactCard(card, "observed"));
@@ -256,7 +312,12 @@ export const searchExperiences = query({
 
     const seen = new Set(observed.map((card) => card.externalId));
     const inferred = inferredCandidates
-      .filter((card) => isEligible(card, args.nowMs) && !seen.has(card.externalId))
+      .filter(
+        (card) =>
+          isEligible(card, args.nowMs) &&
+          isWithinRequestedTimeRange(card, startAtMs, endAtMs) &&
+          !seen.has(card.externalId),
+      )
       .slice(0, limit - observed.length)
       .map((card) => compactCard(card, "inferred"));
 

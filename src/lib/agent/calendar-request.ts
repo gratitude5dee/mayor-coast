@@ -9,6 +9,13 @@ export type CalendarRequestResolution =
       endAtMs: number | null;
     }
   | {
+      /** Resolve a named place through the verified corpus, never the model. */
+      kind: "lookup";
+      title: string;
+      startAtMs: number;
+      endAtMs: number | null;
+    }
+  | {
       kind: "clarify";
       responseText: string;
       poll: { question: string; options: string[] } | null;
@@ -57,7 +64,8 @@ export function resolveCalendarRequest(input: {
   const requestText = history.slice(calendarIndex).join(" \n ");
   const selectionItems = input.priorSelections.at(-1)?.items ?? [];
   const target = resolveTarget(requestText, selectionItems);
-  if (target === null) {
+  const explicitTitle = target === null ? extractNamedPlace(requestText) : null;
+  if (target === null && explicitTitle === null) {
     if (selectionItems.length >= 2) {
       return {
         kind: "clarify",
@@ -70,12 +78,13 @@ export function resolveCalendarRequest(input: {
     }
     return null;
   }
+  const calendarTitle = target?.title ?? explicitTitle!;
 
   const time = parseTime(requestText);
   if (time === null) {
     return {
       kind: "clarify",
-      responseText: `What time should I hold for ${target.title}?`,
+      responseText: `What time should I hold for ${calendarTitle}?`,
       poll: {
         question: "What time?",
         options: ["5 PM", "6 PM", "7 PM", "8 PM"],
@@ -94,7 +103,7 @@ export function resolveCalendarRequest(input: {
   if (date === null) {
     return {
       kind: "clarify",
-      responseText: `What date should the ${formatHour(time.hour, time.minute)} ${target.title} hold be for?`,
+      responseText: `What date should the ${formatHour(time.hour, time.minute)} ${calendarTitle} hold be for?`,
       poll: {
         question: "What date?",
         options: [
@@ -114,6 +123,14 @@ export function resolveCalendarRequest(input: {
       poll: null,
     };
   }
+  if (target === null) {
+    return {
+      kind: "lookup",
+      title: explicitTitle!,
+      startAtMs,
+      endAtMs: startAtMs + 2 * 60 * 60_000,
+    };
+  }
   return {
     kind: "create",
     externalId: target.externalId,
@@ -121,6 +138,25 @@ export function resolveCalendarRequest(input: {
     startAtMs,
     endAtMs: startAtMs + 2 * 60 * 60_000,
   };
+}
+
+/**
+ * Supports "calendar invite for 5 PM today at Kin Khao" when that card has
+ * aged out of the bounded conversation context. It returns only a title; the
+ * route must resolve the canonical external ID from Convex before delivery.
+ */
+function extractNamedPlace(text: string): string | null {
+  const afterAt = [...text.matchAll(/\bat\s+([a-z][a-z0-9&'’(). -]{1,80})/giu)]
+    .map((match) => match[1]?.trim() ?? "")
+    .map((value) => value.replace(/\s+(?:today|tomorrow|tonight|toight|tonite|on\s+\w.+)$/iu, "").trim())
+    .filter((value) => value.length >= 2)
+    .at(-1);
+  if (afterAt) return afterAt;
+
+  const beforeTime = text.match(
+    /\b(?:for|to)\s+([a-z][a-z0-9&'’(). -]{1,80}?)\s+at\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)/iu,
+  )?.[1]?.trim();
+  return beforeTime && beforeTime.length >= 2 ? beforeTime : null;
 }
 
 function resolveTarget(

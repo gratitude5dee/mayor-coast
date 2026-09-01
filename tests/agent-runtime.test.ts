@@ -206,6 +206,32 @@ describe("OpenAIResponsesRuntime", () => {
     expect(result.experiences.every((item) => item.entityType === "event")).toBe(true);
   });
 
+  it("treats short Bay-Area shorthand like ‘goin tn’ as a direct event request", async () => {
+    const responses = responsesQueue();
+    const source = dataSource();
+    source.searchExperiences = vi.fn(async () => ({
+      items: [{
+        ...place("event:tn"),
+        entityType: "event" as const,
+        startAtMs: Date.parse("2026-09-02T03:00:00Z"),
+      }],
+      weak: false,
+    }));
+    const runtime = new OpenAIResponsesRuntime({
+      responses: responses.api,
+      dataSource: source,
+    });
+
+    const result = await runtime.run({
+      message: "What events are goin tn?",
+      pseudonymousUserId: "sender_hash",
+      nowMs: Date.parse("2026-09-01T18:00:00-07:00"),
+    });
+
+    expect(responses.parse).not.toHaveBeenCalled();
+    expect(result.plan.selectedExternalIds).toEqual(["event:tn"]);
+  });
+
   it("broadens deterministically after two poll answers instead of creating a third poll", async () => {
     const responses = responsesQueue();
     const source = dataSource();

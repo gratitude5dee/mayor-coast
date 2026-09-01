@@ -18,7 +18,8 @@ const MAX_PREFERENCES_PER_TURN = 10;
 const MAX_CONTEXT_MESSAGES = 20;
 const MAX_CONTEXT_PREFERENCES = 50;
 const MAX_GENERATION_ATTEMPTS = 3;
-const AGENT_RUNTIME_DEADLINE_MS = 2_600;
+/** The route has a longer serverless budget; do not sever slow valid turns at 3s. */
+const AGENT_RUNTIME_DEADLINE_MS = 23_000;
 const MAX_DELIVERY_ATTEMPTS = 5;
 const POLL_TTL_MS = 24 * 60 * 60 * 1_000;
 const DECISION_PROPOSAL_TTL_MS = 2 * 60 * 60 * 1_000;
@@ -184,7 +185,7 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
     typeof elapsedMs !== "number" ||
     !Number.isInteger(elapsedMs) ||
     elapsedMs < 0 ||
-    elapsedMs > 10_000 ||
+    elapsedMs > 25_000 ||
     (serviceTier !== null && typeof serviceTier !== "string")
   ) {
     throw new Error("INVALID_PLAN_LATENCY_METADATA");
@@ -734,7 +735,12 @@ export const persistPlan = internalMutation({
         ? {}
         : { actualServiceTier: args.plan.serviceTier }),
       ...(args.plan.generationKind === "deadline_fallback"
-        ? { deadlineFallbackReason: "planning_deadline_or_fast_unavailable" }
+        ? {
+            deadlineFallbackReason:
+              args.plan.routeReasons.find((reason) =>
+                /^(?:planning_timeout|runtime_dependency_failure|runtime_policy_failure)$/u.test(reason),
+              ) ?? "runtime_dependency_failure",
+          }
         : {}),
     });
     await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId: turn._id });

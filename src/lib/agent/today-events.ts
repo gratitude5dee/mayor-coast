@@ -4,7 +4,7 @@ import type { AgentRunDiagnostics, AgentRunResult } from "./runtime";
 
 const SAN_FRANCISCO_TIME_ZONE = "America/Los_Angeles";
 const TODAY_EVENT_PATTERN =
-  /\b(?:what(?:'s| is)|whats|wats).{0,32}\b(?:going on|happening)\b.{0,32}\b(?:tonight|toight|tonite|today)\b|\b(?:events?|shows?|concerts?|parties?)\b.{0,32}\b(?:tonight|toight|tonite|today)\b/iu;
+  /\b(?:what(?:'s| is)|whats|wats).{0,32}\b(?:(?:going|goin)\s+on|happening)\b.{0,32}\b(?:tonight|toight|tonite|today|tn)\b|\b(?:events?|shows?|concerts?|parties?)\b.{0,32}\b(?:tonight|toight|tonite|today|tn)\b/iu;
 
 type LocalDate = { year: number; month: number; day: number };
 

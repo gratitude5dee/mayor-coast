@@ -41,6 +41,19 @@ describe("deterministic calendar requests", () => {
     });
   });
 
+  it("keeps a specifically named place deterministic when prior cards are no longer in context", () => {
+    expect(resolveCalendarRequest({
+      latestMessage: "Send me a calendar invite for 5 PM today at Kin Khao",
+      recentInboundMessages: [],
+      priorSelections: [],
+      nowMs: NOW_MS,
+    })).toMatchObject({
+      kind: "lookup",
+      title: "Kin Khao",
+      startAtMs: Date.parse("2026-09-01T17:00:00-07:00"),
+    });
+  });
+
   it("resumes from the settled poll answer without losing the original time", () => {
     const result = resolveCalendarRequest({
       latestMessage: "Poll answer: What date? — Today, Sep 1",

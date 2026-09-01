@@ -3,6 +3,9 @@
   "framework": "nextjs",
   "regions": ["sfo1"],
   "functions": {
+    "src/app/api/internal/agent/route.ts": {
+      "maxDuration": 25
+    },
     "src/app/api/imessage/webhook/route.ts": {
       "maxDuration": 60
     }

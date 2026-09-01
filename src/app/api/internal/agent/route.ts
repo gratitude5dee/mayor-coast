@@ -19,10 +19,10 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 5;
+export const maxDuration = 25;
 
-/** Leave a little time for the signed caller to persist and deliver a fallback. */
-const PLANNING_DEADLINE_MS = 2_400;
+/** Three seconds is a target for direct paths, never a reply-killing cliff. */
+const PLANNING_DEADLINE_MS = 20_000;
 
 const messageSchema = z
   .object({
@@ -81,6 +81,7 @@ const requestSchema = z
 function deadlineFallback(input: {
   isFirstTurn: boolean;
   elapsedMs: number;
+  reason: "planning_timeout" | "runtime_dependency_failure" | "runtime_policy_failure";
 }): Response {
   return privateJson({
     responseText: withCoastFirstTurnIntro(
@@ -92,7 +93,7 @@ function deadlineFallback(input: {
     preferenceUpdates: [],
     provenanceIds: [],
     modelRoute: "luna_high_fast",
-    routeReasons: ["planning_deadline_fallback"],
+    routeReasons: [input.reason],
     modelSteps: 0,
     toolCalls: 0,
     retrievalMode: "none",
@@ -100,6 +101,30 @@ function deadlineFallback(input: {
     elapsedMs: input.elapsedMs,
     serviceTier: null,
   });
+}
+
+/** Bounded observability only: no user text, URLs, or credentials. */
+function fallbackReason(
+  error: unknown,
+): "planning_timeout" | "runtime_dependency_failure" | "runtime_policy_failure" {
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return "planning_timeout";
+  }
+  if (error instanceof Error && /(?:abort|timeout)/iu.test(error.name)) {
+    return "planning_timeout";
+  }
+  if (error instanceof Error && /policy_violation/iu.test(error.message)) {
+    return "runtime_policy_failure";
+  }
+  return "runtime_dependency_failure";
+}
+
+function samePlaceTitle(left: string, right: string): boolean {
+  const normalize = (value: string) => value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, " ")
+    .trim();
+  return normalize(left) === normalize(right);
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -232,6 +257,66 @@ export async function POST(request: Request): Promise<Response> {
         });
       }
     }
+    if (calendarRequest?.kind === "lookup") {
+      const lookup = await dataSource.searchExperiences({
+        query: calendarRequest.title,
+        entityType: "place",
+        neighborhoods: [],
+        primaryTypes: [],
+        priceBands: [],
+        startAtMs: null,
+        endAtMs: null,
+        limit: 3,
+        matchMode: "observed",
+      });
+      const experience = lookup.items.find((item) =>
+        item.entityType === "place" && samePlaceTitle(item.title, calendarRequest.title),
+      );
+      if (experience) {
+        return privateJson({
+          responseText: withCoastFirstTurnIntro(
+            `Locked: a one-tap calendar hold for ${experience.title}, with a 15-minute reminder. This is not a reservation—use the booking or contact option I send next to confirm it.`,
+            isFirstTurn,
+          ),
+          selectedExternalIds: [],
+          poll: null,
+          preferenceUpdates: [],
+          provenanceIds: [],
+          modelRoute: "luna_high_fast",
+          routeReasons: ["deterministic_calendar_lookup"],
+          modelSteps: 0,
+          toolCalls: 1,
+          retrievalMode: "observed",
+          generationKind: "deterministic",
+          elapsedMs: Date.now() - startedAtMs,
+          serviceTier: null,
+          nextAction: {
+            type: "create_calendar",
+            targetExternalId: experience.externalId,
+            startAtMs: calendarRequest.startAtMs,
+            endAtMs: calendarRequest.endAtMs,
+          },
+        });
+      }
+      return privateJson({
+        responseText: withCoastFirstTurnIntro(
+          `I couldn’t verify ${calendarRequest.title} in the current guide, so I won’t make a calendar hold for it. Send a current COAST result or ask me to find it first.`,
+          isFirstTurn,
+        ),
+        selectedExternalIds: [],
+        poll: null,
+        preferenceUpdates: [],
+        provenanceIds: [],
+        modelRoute: "luna_high_fast",
+        routeReasons: ["deterministic_calendar_lookup_miss"],
+        modelSteps: 0,
+        toolCalls: 1,
+        retrievalMode: "observed",
+        generationKind: "deterministic",
+        elapsedMs: Date.now() - startedAtMs,
+        serviceTier: null,
+      });
+    }
     const result = await agent.run({
       message: latest.body,
       pseudonymousUserId: input.threadId,
@@ -292,12 +377,13 @@ export async function POST(request: Request): Promise<Response> {
       elapsedMs,
       serviceTier: result.diagnostics.serviceTier ?? null,
     });
-  } catch {
+  } catch (error) {
     return deadlineFallback({
       isFirstTurn:
         input.isFirstTurn ??
         !input.messages.some((message) => message.direction === "outbound"),
       elapsedMs: Date.now() - startedAtMs,
+      reason: fallbackReason(error),
     });
   }
 }

@@ -165,6 +165,127 @@ describe("native poll live gateway", () => {
     expect(state.set).toHaveBeenCalledWith("coast:photon:poll-cursor:v1:0", 9);
   });
 
+  it("persists a completed backlog even when Photon omits its completion marker", async () => {
+    const entry = {
+      client: {
+        chats: { markRead: vi.fn(async () => undefined) },
+        events: {
+          catchUp: vi.fn(() => ({
+            close: vi.fn(async () => undefined),
+            async *[Symbol.asyncIterator]() {
+              yield {
+                actor: { address: "+14155550100" },
+                chatGuid: "any;-;+14155550100",
+                delta: { type: "voted" as const, optionIdentifier: "option-guid-1" },
+                isFromMe: false,
+                occurredAt: new Date("2026-09-01T08:32:00.000Z"),
+                pollMessageGuid: "poll-guid-1",
+                sequence: 17,
+                type: "poll.changed" as const,
+              };
+            },
+          })),
+        },
+        locations: { get: vi.fn(), request: vi.fn() },
+        polls: {
+          get: vi.fn(async () => ({
+            options: [{ optionIdentifier: "option-guid-1", text: "Food" }],
+            pollMessageGuid: "poll-guid-1",
+            title: "",
+          })),
+          subscribeEvents: vi.fn(),
+        },
+      },
+      phone: "shared",
+    } as unknown as AdvancedEntry;
+    const state = { get: vi.fn(async () => 16), set: vi.fn(async () => undefined) };
+    const adapter = {
+      encodeThreadId: vi.fn(() => "imessage:any;-;+14155550100~shared"),
+      isDM: vi.fn(() => true),
+      startTyping: vi.fn(async () => undefined),
+    };
+
+    await consumeAdvancedNativePollVotes({
+      adapter: adapter as never,
+      application: application(),
+      catchUpOnly: true,
+      entries: [entry],
+      signal: new AbortController().signal,
+      state: state as never,
+    });
+
+    expect(state.set).toHaveBeenCalledWith("coast:photon:poll-cursor:v1:0", 17);
+  });
+
+  it("does not reprocess a terminal poll event if Photon replays its cursor", async () => {
+    const event = {
+      actor: { address: "+14155550100" },
+      chatGuid: "any;-;+14155550100",
+      delta: { type: "voted" as const, optionIdentifier: "option-guid-1" },
+      isFromMe: false,
+      occurredAt: new Date("2026-09-01T08:34:00.000Z"),
+      pollMessageGuid: "poll-guid-1",
+      sequence: 0,
+      type: "poll.changed" as const,
+    };
+    const entry = {
+      client: {
+        chats: { markRead: vi.fn(async () => undefined) },
+        events: {
+          catchUp: vi.fn(() => ({
+            close: vi.fn(async () => undefined),
+            async *[Symbol.asyncIterator]() {
+              yield event;
+            },
+          })),
+        },
+        locations: { get: vi.fn(), request: vi.fn() },
+        polls: {
+          get: vi.fn(async () => ({
+            options: [{ optionIdentifier: "option-guid-1", text: "Food" }],
+            pollMessageGuid: "poll-guid-1",
+            title: "",
+          })),
+          subscribeEvents: vi.fn(),
+        },
+      },
+      phone: "shared",
+    } as unknown as AdvancedEntry;
+    const saved = new Map<string, unknown>();
+    const state = {
+      get: vi.fn(async (key: string) =>
+        key === "coast:photon:poll-cursor:v1:0" ? 0 : (saved.get(key) ?? null)),
+      set: vi.fn(async (key: string, value: unknown) => {
+        saved.set(key, value);
+      }),
+    };
+    const app = application();
+    vi.mocked(app.claimInbound).mockResolvedValue({ status: "blocked" });
+    const adapter = {
+      encodeThreadId: vi.fn(() => "imessage:any;-;+14155550100~shared"),
+      isDM: vi.fn(() => true),
+      startTyping: vi.fn(async () => undefined),
+    };
+    const input = {
+      adapter: adapter as never,
+      application: app,
+      catchUpOnly: true,
+      entries: [entry],
+      signal: new AbortController().signal,
+      state: state as never,
+    };
+
+    await consumeAdvancedNativePollVotes(input);
+    await consumeAdvancedNativePollVotes(input);
+
+    expect(app.claimInbound).toHaveBeenCalledTimes(1);
+    expect(state.set).toHaveBeenCalledWith(
+      expect.stringMatching(/^coast:photon:poll-event-seen:v1:0:[a-f0-9]{64}$/),
+      true,
+      30 * 24 * 60 * 60 * 1_000,
+    );
+  });
+
   it("advances past a terminal stale vote so later poll activity is not blocked", async () => {
     const occurredAt = new Date("2026-09-01T08:30:00.000Z");
     const events = [
@@ -221,7 +342,11 @@ describe("native poll live gateway", () => {
     } as unknown as AdvancedEntry;
     const app = application();
     vi.mocked(app.claimInbound)
-      .mockRejectedValueOnce(new Error("POLL_SELECTION_NOT_PENDING"))
+      // Convex action errors cross the serverless boundary as structured data,
+      // not necessarily as native Error instances.
+      .mockRejectedValueOnce({
+        errorData: { message: "POLL_SELECTION_NOT_PENDING" },
+      })
       .mockResolvedValueOnce({
         claimId: "claim_current_poll",
         command: "none",

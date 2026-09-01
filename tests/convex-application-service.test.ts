@@ -61,7 +61,7 @@ describe("Convex application privacy boundary", () => {
   it("drops a replayed poll vote after newer conversation input", async () => {
     const action = vi.fn(async (...args: unknown[]) => {
       void args;
-      throw new Error("POLL_SELECTION_SUPERSEDED");
+      return { terminal: true };
     });
     const service = new ConvexCoastApplicationService({
       client: { action } as unknown as ConvexHttpClient,

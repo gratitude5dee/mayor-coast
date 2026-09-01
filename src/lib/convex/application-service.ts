@@ -88,6 +88,9 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
       throw error;
     }
 
+    if (isTerminalPollClaimResult(result)) {
+      return { status: "blocked" };
+    }
     if (result.duplicate) return { status: "duplicate" };
     if (!result.accepted) return { status: "blocked" };
     return {
@@ -124,11 +127,40 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
   }
 }
 
+function isTerminalPollClaimResult(
+  value: unknown,
+): value is { terminal: true } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "terminal" in value &&
+    value.terminal === true
+  );
+}
+
 function isNonRetryablePollError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = collectErrorText(error);
   return /POLL_(?:OPTION_NOT_FOUND|SELECTION_NOT_PENDING|SELECTION_SUPERSEDED|THREAD_NOT_FOUND|USER_NOT_ACTIVE)/.test(
     message,
   );
+}
+
+function collectErrorText(value: unknown, seen = new Set<unknown>()): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null || seen.has(value)) return "";
+  seen.add(value);
+
+  const fields: unknown[] = [];
+  if (value instanceof Error) fields.push(value.message, value.cause);
+  for (const nested of Object.values(value)) fields.push(nested);
+  const record = value as Record<string, unknown>;
+  for (const key of Object.getOwnPropertyNames(value)) fields.push(record[key]);
+  return [
+    ...fields.map((field) => collectErrorText(field, seen)),
+    // Some RPC wrapper classes keep their error text on a non-enumerable
+    // property while still exposing it through their string representation.
+    String(value),
+  ].join(" ");
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {

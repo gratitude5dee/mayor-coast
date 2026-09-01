@@ -378,3 +378,13 @@ export const inboundClaimResult = v.object({
   messageId: v.id("coastMessages"),
   turnId: v.id("coastTurns"),
 });
+
+/** A poll event that is validly stale or expired and must be consumed. */
+export const terminalPollClaimResult = v.object({
+  terminal: v.literal(true),
+});
+
+export const pollClaimResult = v.union(
+  inboundClaimResult,
+  terminalPollClaimResult,
+);

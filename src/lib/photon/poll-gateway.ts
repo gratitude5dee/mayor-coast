@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { iMessageAdapter } from "@photon-ai/chat-adapter-imessage";
 import type { StateAdapter } from "chat";
 
@@ -16,6 +18,8 @@ import {
 const GATEWAY_DELIVERY_SCOPE = "photon-live-gateway";
 const INITIAL_CATCH_UP_MAX_AGE_MS = 30 * 60 * 1_000;
 const CURSOR_KEY_PREFIX = "coast:photon:poll-cursor:v1";
+const POLL_EVENT_SEEN_KEY_PREFIX = "coast:photon:poll-event-seen:v1";
+const POLL_EVENT_SEEN_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 
 type RecordValue = Record<string, unknown>;
 
@@ -75,7 +79,14 @@ async function consumeAdvancedEntry(
     storedCursor >= 0
       ? storedCursor
       : undefined;
+  let persistedCursor = cursor;
   const now = dependencies.now ?? Date.now;
+
+  const persistCursor = async (): Promise<void> => {
+    if (cursor === undefined || cursor === persistedCursor) return;
+    await dependencies.state.set(cursorKey, cursor);
+    persistedCursor = cursor;
+  };
 
   const catchUp = entry.client.events.catchUp(cursor);
   try {
@@ -83,7 +94,7 @@ async function consumeAdvancedEntry(
       if (dependencies.signal.aborted) return;
       if (isCatchUpComplete(event)) {
         cursor = Math.max(cursor ?? 0, event.headSequence);
-        await dependencies.state.set(cursorKey, cursor);
+        await persistCursor();
         break;
       }
       if (
@@ -91,19 +102,32 @@ async function consumeAdvancedEntry(
         (storedCursor !== null ||
           event.occurredAt.getTime() >= now() - INITIAL_CATCH_UP_MAX_AGE_MS)
       ) {
-        try {
-          await handleAdvancedPollEvent(dependencies, entry, event);
-        } catch (error) {
-          // A stale, already-answered, or expired native poll is terminal
-          // input. It must not pin the durable cursor ahead of newer votes in
-          // Photon’s catch-up stream. Transport failures remain retryable.
-          if (!isTerminalPollVoteError(error)) throw error;
+        const seenKey = pollEventSeenKey(index, event);
+        const alreadyHandled =
+          (await dependencies.state.get<boolean>(seenKey)) === true;
+        if (!alreadyHandled) {
+          try {
+            await handleAdvancedPollEvent(dependencies, entry, event);
+          } catch (error) {
+            // A stale, already-answered, or expired native poll is terminal
+            // input. It must not pin the durable cursor ahead of newer votes
+            // in Photon’s catch-up stream. Transport failures remain retryable.
+            if (!isTerminalPollVoteError(error)) throw error;
+          }
+          // The marker is a one-way hash of provider event metadata. It
+          // protects against replay without retaining a participant address,
+          // message body, raw poll GUID, or location.
+          await dependencies.state.set(seenKey, true, POLL_EVENT_SEEN_TTL_MS);
         }
       }
       const sequence = eventSequence(event);
       if (sequence !== null) cursor = Math.max(cursor ?? 0, sequence);
     }
   } finally {
+    // Photon may finish a catch-up iterable without emitting its optional
+    // completion marker. Persist the highest event sequence either way so a
+    // terminal old vote cannot be replayed on every scheduled invocation.
+    await persistCursor();
     await catchUp.close?.().catch(() => undefined);
   }
 
@@ -121,7 +145,7 @@ async function consumeAdvancedEntry(
         if (!isTerminalPollVoteError(error)) throw error;
       }
       cursor = result.value.sequence;
-      await dependencies.state.set(cursorKey, cursor);
+      await persistCursor();
     }
   } finally {
     await iterator.return?.().catch(() => undefined);
@@ -130,7 +154,9 @@ async function consumeAdvancedEntry(
 }
 
 function isTerminalPollVoteError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : "";
+  // Errors crossing the Convex action boundary can be nested structured
+  // values, not necessarily native Error instances in the Vercel runtime.
+  const message = collectErrorText(error);
   return [
     "POLL_SELECTION_SUPERSEDED",
     "POLL_SELECTION_NOT_PENDING",
@@ -138,6 +164,22 @@ function isTerminalPollVoteError(error: unknown): boolean {
     "POLL_THREAD_NOT_FOUND",
     "POLL_USER_NOT_ACTIVE",
   ].some((code) => message.includes(code));
+}
+
+function collectErrorText(value: unknown, seen = new Set<unknown>()): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null || seen.has(value)) return "";
+  seen.add(value);
+
+  const fields: unknown[] = [];
+  if (value instanceof Error) fields.push(value.message, value.cause);
+  for (const nested of Object.values(value)) fields.push(nested);
+  const record = value as Record<string, unknown>;
+  for (const key of Object.getOwnPropertyNames(value)) fields.push(record[key]);
+  return [
+    ...fields.map((field) => collectErrorText(field, seen)),
+    String(value),
+  ].join(" ");
 }
 
 function isCatchUpComplete(
@@ -172,6 +214,16 @@ function eventSequence(value: unknown): number | null {
   return typeof sequence === "number" && Number.isSafeInteger(sequence)
     ? sequence
     : null;
+}
+
+function pollEventSeenKey(index: number, event: AdvancedPollEvent): string {
+  const option = "optionIdentifier" in event.delta
+    ? event.delta.optionIdentifier
+    : event.delta.type;
+  const fingerprint = createHash("sha256")
+    .update(`${event.pollMessageGuid}\u0000${option}\u0000${event.occurredAt.getTime()}`)
+    .digest("hex");
+  return `${POLL_EVENT_SEEN_KEY_PREFIX}:${index}:${fingerprint}`;
 }
 
 async function handleAdvancedPollEvent(

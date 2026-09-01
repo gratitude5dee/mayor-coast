@@ -4,7 +4,11 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { action } from "./_generated/server";
-import { experienceResult, inboundClaimResult } from "./lib/validators";
+import {
+  experienceResult,
+  inboundClaimResult,
+  pollClaimResult,
+} from "./lib/validators";
 import { assertVercelServiceSecret as assertServiceSecret } from "./lib/service_auth";
 
 type InboundClaim = Infer<typeof inboundClaimResult>;
@@ -199,24 +203,49 @@ export const claimPollVote = action({
     providerPollId: v.optional(v.string()),
     selectedOption: v.string(),
   },
-  returns: inboundClaimResult,
-  handler: async (ctx, args): Promise<InboundClaim> => {
+  returns: pollClaimResult,
+  handler: async (ctx, args): Promise<Infer<typeof pollClaimResult>> => {
     assertServiceSecret(args.serviceSecret);
-    return await ctx.runMutation(internal.polls.claimVote, {
-      webhookId: args.webhookId,
-      providerMessageId: args.providerMessageId,
-      senderHash: args.senderHash,
-      threadKeyHash: args.threadKeyHash,
-      encryptedThreadRef: args.encryptedThreadRef,
-      pollTitle: args.pollTitle,
-      ...(args.providerPollId === undefined
-        ? {}
-        : { providerPollId: args.providerPollId }),
-      selectedOption: args.selectedOption,
-      receivedAtMs: args.receivedAtMs,
-    });
+    try {
+      return await ctx.runMutation(internal.polls.claimVote, {
+        webhookId: args.webhookId,
+        providerMessageId: args.providerMessageId,
+        senderHash: args.senderHash,
+        threadKeyHash: args.threadKeyHash,
+        encryptedThreadRef: args.encryptedThreadRef,
+        pollTitle: args.pollTitle,
+        ...(args.providerPollId === undefined
+          ? {}
+          : { providerPollId: args.providerPollId }),
+        selectedOption: args.selectedOption,
+        receivedAtMs: args.receivedAtMs,
+      });
+    } catch (error) {
+      if (isTerminalPollClaimError(error)) return { terminal: true };
+      throw error;
+    }
   },
 });
+
+function isTerminalPollClaimError(error: unknown): boolean {
+  const message = collectErrorText(error);
+  return /POLL_(?:OPTION_NOT_FOUND|SELECTION_NOT_PENDING|SELECTION_SUPERSEDED|THREAD_NOT_FOUND|USER_NOT_ACTIVE)/.test(
+    message,
+  );
+}
+
+function collectErrorText(value: unknown, seen = new Set<unknown>()): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null || seen.has(value)) return "";
+  seen.add(value);
+
+  const fields: unknown[] = [];
+  if (value instanceof Error) fields.push(value.message, value.cause);
+  for (const nested of Object.values(value)) fields.push(nested);
+  const record = value as Record<string, unknown>;
+  for (const key of Object.getOwnPropertyNames(value)) fields.push(record[key]);
+  return [...fields.map((field) => collectErrorText(field, seen)), String(value)].join(" ");
+}
 
 export const getTurnStatus = action({
   args: { serviceSecret: v.string(), turnId: v.id("coastTurns") },

@@ -4,6 +4,22 @@ export type PendingPollCandidate = {
   options: readonly string[];
 };
 
+/**
+ * Multiple historical polls can legitimately contain the same labels. The
+ * active turn owns the only poll that may advance the current conversation,
+ * so use it as the candidate set before falling back to broader matching.
+ */
+export function preferActiveTurnPolls<
+  T extends PendingPollCandidate & { turnId: string },
+>(
+  pending: readonly T[],
+  activeTurnId: string | undefined,
+): readonly T[] {
+  if (activeTurnId === undefined) return pending;
+  const active = pending.filter((candidate) => candidate.turnId === activeTurnId);
+  return active.length > 0 ? active : pending;
+}
+
 function normalize(value: string): string {
   return value
     .trim()

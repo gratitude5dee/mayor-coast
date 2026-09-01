@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
 import {
   isSamePollText,
+  preferActiveTurnPolls,
   selectPendingPollCandidate,
 } from "./lib/pollMatching";
 import { inboundClaimResult } from "./lib/validators";
@@ -69,13 +70,6 @@ export const claimVote = internalMutation({
       throw new Error("POLL_THREAD_NOT_FOUND");
     }
     if (user.status !== "active") throw new Error("POLL_USER_NOT_ACTIVE");
-    if (
-      thread.latestInboundAtMs >
-      args.receivedAtMs + NEWER_INBOUND_TOLERANCE_MS
-    ) {
-      throw new Error("POLL_SELECTION_SUPERSEDED");
-    }
-
     let poll = args.providerPollId === undefined
       ? null
       : await ctx.db
@@ -105,7 +99,7 @@ export const claimVote = internalMutation({
         .order("desc")
         .take(6);
       poll = selectPendingPollCandidate({
-        pending,
+        pending: preferActiveTurnPolls(pending, thread.activeTurnId),
         pollTitle: args.pollTitle,
         ...(args.providerPollId === undefined
           ? {}
@@ -115,6 +109,16 @@ export const claimVote = internalMutation({
     }
     if (poll === null || poll.expiresAtMs <= args.receivedAtMs) {
       throw new Error("POLL_SELECTION_NOT_PENDING");
+    }
+    // Photon can deliver a native poll vote from its event backlog after the
+    // user has sent another message. Reject only a vote for an older poll;
+    // delayed votes for the active turn are still the user's current answer.
+    if (
+      thread.latestInboundAtMs >
+        args.receivedAtMs + NEWER_INBOUND_TOLERANCE_MS &&
+      poll.createdAtMs < thread.latestInboundAtMs
+    ) {
+      throw new Error("POLL_SELECTION_SUPERSEDED");
     }
     const canonicalOption = poll.options.find(
       (option) => isSamePollText(option, args.selectedOption),

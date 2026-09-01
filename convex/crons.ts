@@ -34,8 +34,8 @@ crons.interval(
 );
 
 crons.interval(
-  "maintain Photon poll gateway",
-  { minutes: 8 },
+  "catch up native Photon poll votes",
+  { minutes: 1 },
   maintainPollGatewayReference,
   {},
 );

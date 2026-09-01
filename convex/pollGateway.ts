@@ -22,7 +22,9 @@ export const maintain = internalAction({
       await fetch(gatewayUrl, {
         method: "POST",
         headers: { authorization: `Bearer ${serviceSecret}` },
-        signal: AbortSignal.timeout(10_000),
+        // The gateway uses a bounded 50-second catch-up. Allow it enough time
+        // to close the cursor cleanly, while keeping each cron run finite.
+        signal: AbortSignal.timeout(55_000),
       });
     } catch {
       // The next bounded cron tick retries. No user content or secret is logged.

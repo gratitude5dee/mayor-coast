@@ -32,6 +32,12 @@ type PollGatewayDependencies = {
 type AdvancedPollGatewayDependencies = {
   adapter: iMessageAdapter;
   application: CoastApplicationService;
+  /**
+   * Process the durable event backlog and return. This is the serverless-safe
+   * mode: a scheduled invocation resumes from the stored cursor rather than
+   * depending on one long-lived Vercel process to receive every native vote.
+   */
+  catchUpOnly?: boolean;
   entries?: readonly AdvancedEntry[];
   now?: () => number;
   signal: AbortSignal;
@@ -85,7 +91,14 @@ async function consumeAdvancedEntry(
         (storedCursor !== null ||
           event.occurredAt.getTime() >= now() - INITIAL_CATCH_UP_MAX_AGE_MS)
       ) {
-        await handleAdvancedPollEvent(dependencies, entry, event);
+        try {
+          await handleAdvancedPollEvent(dependencies, entry, event);
+        } catch (error) {
+          // A stale, already-answered, or expired native poll is terminal
+          // input. It must not pin the durable cursor ahead of newer votes in
+          // Photon’s catch-up stream. Transport failures remain retryable.
+          if (!isTerminalPollVoteError(error)) throw error;
+        }
       }
       const sequence = eventSequence(event);
       if (sequence !== null) cursor = Math.max(cursor ?? 0, sequence);
@@ -94,7 +107,7 @@ async function consumeAdvancedEntry(
     await catchUp.close?.().catch(() => undefined);
   }
 
-  if (dependencies.signal.aborted) return;
+  if (dependencies.catchUpOnly || dependencies.signal.aborted) return;
   const live = entry.client.polls.subscribeEvents();
   const iterator = live[Symbol.asyncIterator]();
   try {
@@ -102,7 +115,11 @@ async function consumeAdvancedEntry(
       const result = await nextUntilAbort(iterator, dependencies.signal);
       if (result === null || result.done) break;
       if (result.value.sequence <= (cursor ?? -1)) continue;
-      await handleAdvancedPollEvent(dependencies, entry, result.value);
+      try {
+        await handleAdvancedPollEvent(dependencies, entry, result.value);
+      } catch (error) {
+        if (!isTerminalPollVoteError(error)) throw error;
+      }
       cursor = result.value.sequence;
       await dependencies.state.set(cursorKey, cursor);
     }
@@ -110,6 +127,17 @@ async function consumeAdvancedEntry(
     await iterator.return?.().catch(() => undefined);
     await live.close?.().catch(() => undefined);
   }
+}
+
+function isTerminalPollVoteError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  return [
+    "POLL_SELECTION_SUPERSEDED",
+    "POLL_SELECTION_NOT_PENDING",
+    "POLL_OPTION_NOT_FOUND",
+    "POLL_THREAD_NOT_FOUND",
+    "POLL_USER_NOT_ACTIVE",
+  ].some((code) => message.includes(code));
 }
 
 function isCatchUpComplete(

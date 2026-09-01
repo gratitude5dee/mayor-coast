@@ -132,6 +132,127 @@ describe("native poll live gateway", () => {
     expect(closeCatchUp).toHaveBeenCalledOnce();
   });
 
+  it("uses the durable backlog without starting a serverless live listener", async () => {
+    const subscribeEvents = vi.fn();
+    const entry = {
+      client: {
+        chats: { markRead: vi.fn(async () => undefined) },
+        events: {
+          catchUp: vi.fn(() => ({
+            close: vi.fn(async () => undefined),
+            async *[Symbol.asyncIterator]() {
+              yield { headSequence: 9, type: "catchup.complete" as const };
+            },
+          })),
+        },
+        locations: { get: vi.fn(), request: vi.fn() },
+        polls: { get: vi.fn(), subscribeEvents },
+      },
+      phone: "shared",
+    } as unknown as AdvancedEntry;
+    const state = { get: vi.fn(async () => 8), set: vi.fn(async () => undefined) };
+
+    await consumeAdvancedNativePollVotes({
+      adapter: {} as never,
+      application: application(),
+      catchUpOnly: true,
+      entries: [entry],
+      signal: new AbortController().signal,
+      state: state as never,
+    });
+
+    expect(subscribeEvents).not.toHaveBeenCalled();
+    expect(state.set).toHaveBeenCalledWith("coast:photon:poll-cursor:v1:0", 9);
+  });
+
+  it("advances past a terminal stale vote so later poll activity is not blocked", async () => {
+    const occurredAt = new Date("2026-09-01T08:30:00.000Z");
+    const events = [
+      {
+        actor: { address: "+14155550100" },
+        chatGuid: "any;-;+14155550100",
+        delta: { type: "voted" as const, optionIdentifier: "old-option" },
+        isFromMe: false,
+        occurredAt,
+        pollMessageGuid: "old-poll",
+        sequence: 10,
+        type: "poll.changed" as const,
+      },
+      {
+        actor: { address: "+14155550100" },
+        chatGuid: "any;-;+14155550100",
+        delta: { type: "voted" as const, optionIdentifier: "current-option" },
+        isFromMe: false,
+        occurredAt,
+        pollMessageGuid: "current-poll",
+        sequence: 11,
+        type: "poll.changed" as const,
+      },
+    ];
+    const entry = {
+      client: {
+        chats: { markRead: vi.fn(async () => undefined) },
+        events: {
+          catchUp: vi.fn(() => ({
+            close: vi.fn(async () => undefined),
+            async *[Symbol.asyncIterator]() {
+              yield* events;
+              yield { headSequence: 11, type: "catchup.complete" as const };
+            },
+          })),
+        },
+        locations: { get: vi.fn(), request: vi.fn() },
+        polls: {
+          get: vi.fn(async (pollMessageGuid: string) => ({
+            options: [
+              {
+                optionIdentifier:
+                  pollMessageGuid === "old-poll" ? "old-option" : "current-option",
+                text: pollMessageGuid === "old-poll" ? "Old choice" : "Food",
+              },
+            ],
+            pollMessageGuid,
+            title: "",
+          })),
+          subscribeEvents: vi.fn(),
+        },
+      },
+      phone: "shared",
+    } as unknown as AdvancedEntry;
+    const app = application();
+    vi.mocked(app.claimInbound)
+      .mockRejectedValueOnce(new Error("POLL_SELECTION_NOT_PENDING"))
+      .mockResolvedValueOnce({
+        claimId: "claim_current_poll",
+        command: "none",
+        shouldAcknowledge: true,
+        shouldStartTyping: true,
+        status: "claimed",
+        turnId: "turn_current_poll",
+      });
+    const state = { get: vi.fn(async () => 9), set: vi.fn(async () => undefined) };
+    const adapter = {
+      encodeThreadId: vi.fn(() => "imessage:any;-;+14155550100~shared"),
+      isDM: vi.fn(() => true),
+      startTyping: vi.fn(async () => undefined),
+    };
+
+    await consumeAdvancedNativePollVotes({
+      adapter: adapter as never,
+      application: app,
+      catchUpOnly: true,
+      entries: [entry],
+      signal: new AbortController().signal,
+      state: state as never,
+    });
+
+    expect(app.claimInbound).toHaveBeenCalledTimes(2);
+    expect(app.executeTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: "turn_current_poll" }),
+    );
+    expect(state.set).toHaveBeenCalledWith("coast:photon:poll-cursor:v1:0", 11);
+  });
+
   it("parses selected poll content without relying on webhook-only fields", () => {
     const adapter = {
       encodeThreadId: vi.fn(() => "iMessage;-;+14155550100|shared"),

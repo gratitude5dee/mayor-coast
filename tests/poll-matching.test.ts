@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { selectPendingPollCandidate } from "../convex/lib/pollMatching";
+import {
+  preferActiveTurnPolls,
+  selectPendingPollCandidate,
+} from "../convex/lib/pollMatching";
 
 describe("native poll matching", () => {
   it("prefers the durable provider poll GUID", () => {
@@ -79,5 +82,31 @@ describe("native poll matching", () => {
     });
 
     expect(matching?.providerPollId).toBe("poll-guid-1");
+  });
+
+  it("prefers the active turn when older polls repeat the same option", () => {
+    const pending = [
+      {
+        providerPollId: "old-poll-guid",
+        question: "What are we finding?",
+        options: ["Food", "Drinks"],
+        turnId: "turn-old",
+      },
+      {
+        providerPollId: "current-modal-view-id",
+        question: "COAST is on. What's the move tonight?",
+        options: ["Food", "Drinks", "Something to do"],
+        turnId: "turn-current",
+      },
+    ];
+
+    const matching = selectPendingPollCandidate({
+      pending: preferActiveTurnPolls(pending, "turn-current"),
+      pollTitle: "",
+      providerPollId: "native-poll-guid",
+      selectedOption: "Food",
+    });
+
+    expect(matching?.turnId).toBe("turn-current");
   });
 });

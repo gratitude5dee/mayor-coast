@@ -28,7 +28,7 @@ flowchart LR
 4. When the next step is a clear set of choices, COAST sends one native poll instead of listing alternatives in prose. A vote starts typing immediately and settles for two seconds, so changing the selection revises the same durable turn instead of sending two answers.
 5. Verified matches render as native cards. Event results and user-requested place holds can be added to Apple Calendar in one tap; every `.ics` includes a 15-minute reminder and is followed by a source-backed registration, reservation, or phone-confirmation action. Calendar holds never claim availability.
 6. Opted-in post-visit check-ins and six-hour inactivity scans run in Convex. Idle nudges require prior taste signals, respect 10 AM–10 PM SF quiet hours, are capped at one per six hours, and skip stopped, stale, or currently active conversations.
-5. A “near me” or directions request sends one native Find My request. A consented, fresh location is used only in the serverless resolver to rank public destinations or make a Maps handoff; exact origin never enters Convex, OpenAI, logs, or outbound URLs.
+7. A “near me” or directions request sends one native Find My request. A consented, fresh location is used only in the serverless resolver to rank public destinations or make a Maps handoff; exact origin never enters Convex, OpenAI, logs, or outbound URLs.
 
 ## Experience guarantees
 

@@ -30,11 +30,11 @@ export async function POST(request: Request): Promise<Response> {
     await consumeAdvancedNativePollVotes({
       adapter: messaging.adapter,
       application: messaging.application,
-      // Photon keeps native poll changes in its durable event backlog. A
-      // bounded catch-up per invocation is reliable on serverless; a process
-      // held open with after() can miss votes when Vercel freezes or replaces
-      // that invocation.
-      catchUpOnly: true,
+      // Start with Photon’s durable backlog, then keep its live poll feed open
+      // for this bounded serverless invocation. The Convex cron replaces the
+      // listener every minute, which keeps polls responsive without trusting a
+      // single warm Vercel instance to be permanent.
+      catchUpOnly: false,
       signal: AbortSignal.timeout(50_000),
       state: messaging.state,
     });

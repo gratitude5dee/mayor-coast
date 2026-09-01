@@ -229,7 +229,7 @@ export const claimPollVote = action({
 
 function isTerminalPollClaimError(error: unknown): boolean {
   const message = collectErrorText(error);
-  return /POLL_(?:OPTION_NOT_FOUND|SELECTION_NOT_PENDING|SELECTION_SUPERSEDED|THREAD_NOT_FOUND|USER_NOT_ACTIVE)/.test(
+  return /POLL_(?:OPTION_NOT_FOUND|SELECTION_NOT_PENDING|SELECTION_NOT_CHANGEABLE|SELECTION_SUPERSEDED|THREAD_NOT_FOUND|USER_NOT_ACTIVE)/.test(
     message,
   );
 }

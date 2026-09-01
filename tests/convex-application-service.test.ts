@@ -87,4 +87,32 @@ describe("Convex application privacy boundary", () => {
       }),
     ).resolves.toEqual({ status: "blocked" });
   });
+
+  it("treats a replay after the two-second selection window as terminal", async () => {
+    const action = vi.fn(async () => {
+      throw new Error("POLL_SELECTION_NOT_CHANGEABLE");
+    });
+    const service = new ConvexCoastApplicationService({
+      client: { action } as unknown as ConvexHttpClient,
+      identityPepper: "identity-pepper-that-is-long-enough-for-tests",
+      serviceSecret: "internal-service-secret-that-is-long-enough",
+    });
+
+    await expect(
+      service.claimInbound({
+        deliveryKey: "photon-live-gateway:settled-vote",
+        messages: [{ providerMessageId: "settled-vote", sentAtMs: 1, text: "" }],
+        pollVote: {
+          optionLabel: "Yes—check in",
+          pollTitle: "Want COAST to check in after?",
+          selected: true,
+        },
+        providerMessageId: "settled-vote",
+        receivedAtMs: 1,
+        senderAddress: "+14155550100",
+        threadId: "imessage:any;-;+14155550100~shared",
+        webhookId: "photon-live-gateway",
+      }),
+    ).resolves.toEqual({ status: "blocked" });
+  });
 });

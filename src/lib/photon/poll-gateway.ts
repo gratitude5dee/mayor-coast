@@ -233,12 +233,15 @@ async function handleAdvancedPollEvent(
   event: AdvancedPollEvent,
 ): Promise<void> {
   if (
-    event.isFromMe ||
     event.delta.type !== "voted" ||
     typeof event.actor?.address !== "string"
   ) {
     return;
   }
+  // For a poll authored by COAST, Photon can retain `isFromMe: true` on the
+  // later `voted` delta even though `actor` is the DM participant. A `voted`
+  // delta with a participant actor is the authoritative user selection; poll
+  // creation and all non-vote deltas were excluded above.
   const threadId = dependencies.adapter.encodeThreadId({
     chatGuid: event.chatGuid,
     phone: entry.phone,

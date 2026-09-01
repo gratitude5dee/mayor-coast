@@ -48,14 +48,17 @@ function application(): CoastApplicationService {
 }
 
 describe("native poll live gateway", () => {
-  it("bypasses Spectrum's empty-title parser with the raw durable poll event", async () => {
+  it("accepts a voter delta even when Photon retains the outbound poll direction", async () => {
     const controller = new AbortController();
     const occurredAt = new Date("2026-09-01T03:18:00.000Z");
     const event = {
       actor: { address: "+14155550100" },
       chatGuid: "any;-;+14155550100",
       delta: { type: "voted" as const, optionIdentifier: "option-guid-1" },
-      isFromMe: false,
+      // Photon can carry the direction of COAST's original poll message on a
+      // later voter delta. The participant actor and `voted` delta identify
+      // the inbound selection.
+      isFromMe: true,
       occurredAt,
       pollMessageGuid: "poll-guid-1",
       sequence: 42,
@@ -163,6 +166,54 @@ describe("native poll live gateway", () => {
 
     expect(subscribeEvents).not.toHaveBeenCalled();
     expect(state.set).toHaveBeenCalledWith("coast:photon:poll-cursor:v1:0", 9);
+  });
+
+  it("keeps a bounded live listener open between durable catch-ups", async () => {
+    const closeLive = vi.fn(async () => undefined);
+    const subscribeEvents = vi.fn(() => ({
+      close: closeLive,
+      async *[Symbol.asyncIterator]() {
+        yield {
+          actor: { address: "+14155550100" },
+          chatGuid: "any;-;+14155550100",
+          delta: { type: "unvoted" as const, optionIdentifier: "option-guid-1" },
+          isFromMe: true,
+          occurredAt: new Date("2026-09-01T08:31:00.000Z"),
+          pollMessageGuid: "poll-guid-1",
+          sequence: 10,
+          type: "poll.changed" as const,
+        };
+      },
+    }));
+    const entry = {
+      client: {
+        chats: { markRead: vi.fn(async () => undefined) },
+        events: {
+          catchUp: vi.fn(() => ({
+            close: vi.fn(async () => undefined),
+            async *[Symbol.asyncIterator]() {
+              yield { headSequence: 9, type: "catchup.complete" as const };
+            },
+          })),
+        },
+        locations: { get: vi.fn(), request: vi.fn() },
+        polls: { get: vi.fn(), subscribeEvents },
+      },
+      phone: "shared",
+    } as unknown as AdvancedEntry;
+    const state = { get: vi.fn(async () => 9), set: vi.fn(async () => undefined) };
+
+    await consumeAdvancedNativePollVotes({
+      adapter: {} as never,
+      application: application(),
+      entries: [entry],
+      signal: new AbortController().signal,
+      state: state as never,
+    });
+
+    expect(subscribeEvents).toHaveBeenCalledOnce();
+    expect(closeLive).toHaveBeenCalledOnce();
+    expect(state.set).toHaveBeenCalledWith("coast:photon:poll-cursor:v1:0", 10);
   });
 
   it("persists a completed backlog even when Photon omits its completion marker", async () => {

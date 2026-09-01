@@ -23,7 +23,7 @@ function activeRequest(request: {
 function stageKey(
   turnId: Id<"coastTurns">,
   sequence: number,
-  stage: "response" | "experience_card" | "calendar_attachment" | "maps_card",
+  stage: "response" | "experience_card" | "calendar_attachment" | "maps_card" | "poll",
   itemKey: string,
 ): string {
   return `${turnId}:${sequence}:${stage}:${itemKey}`;
@@ -252,7 +252,11 @@ export const completeDirections = internalMutation({
       createdAtMs: args.nowMs,
       updatedAtMs: args.nowMs,
     });
-    const stages = [
+    const stages: Array<{
+      stage: "response" | "maps_card" | "poll";
+      itemKey: string;
+      payload: Record<string, unknown>;
+    }> = [
       { stage: "response" as const, itemKey: "response", payload: { text: responseText } },
       {
         stage: "maps_card" as const,
@@ -260,6 +264,50 @@ export const completeDirections = internalMutation({
         payload: { externalId: card.externalId, travelMode: request.travelMode },
       },
     ];
+    const checkInAtMs = card.inferred.entityType === "event" && card.inferred.startAtUtcMs !== null
+      ? card.inferred.startAtUtcMs + 90 * 60_000
+      : args.nowMs + 2 * 60 * 60_000;
+    if (
+      checkInAtMs >= args.nowMs + 60_000 &&
+      checkInAtMs <= args.nowMs + 12 * 60 * 60_000
+    ) {
+      const decisionId = await ctx.db.insert("coastDecisions", {
+        userId: request.userId,
+        threadId: request.threadId,
+        sourceTurnId: turnId,
+        sourceMessageIds: [],
+        experienceExternalId: card.externalId,
+        entityType: card.inferred.entityType,
+        status: "proposed",
+        revision: 1,
+        proposedAtMs: args.nowMs,
+        updatedAtMs: args.nowMs,
+        expiresAtMs: args.nowMs + 2 * 60 * 60_000,
+      });
+      const question = "Want COAST to check in after?";
+      const options = ["Yes—check in", "No thanks"];
+      stages.push({
+        stage: "poll",
+        itemKey: `check-in:${card.externalId}`,
+        payload: { question, options },
+      });
+      await ctx.db.insert("coastPolls", {
+        userId: request.userId,
+        threadId: request.threadId,
+        turnId,
+        question,
+        options,
+        purpose: "decision_confirm_checkin",
+        decisionId,
+        optionActions: [
+          { option: options[0]!, action: "schedule_checkin", scheduledForMs: checkInAtMs },
+          { option: options[1]!, action: "confirm_without_checkin" },
+        ],
+        status: "pending",
+        createdAtMs: args.nowMs,
+        expiresAtMs: args.nowMs + 2 * 60 * 60_000,
+      });
+    }
     for (const [sequence, stage] of stages.entries()) {
       await ctx.db.insert("outboundDeliveries", {
         turnId,

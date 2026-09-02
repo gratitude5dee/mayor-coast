@@ -64,6 +64,7 @@ describe("COAST persona", () => {
 describe("Bay artist discovery", () => {
   it("recognizes direct artist discovery without treating ordinary music events as artists", () => {
     expect(isArtistDiscoveryRequest("Put me on to a new Bay artist")).toBe(true);
+    expect(isArtistDiscoveryRequest("Put me on to Bay artists")).toBe(true);
     expect(isArtistDiscoveryRequest("What should I listen to?")).toBe(true);
     expect(isArtistDiscoveryRequest("Any local music recommendations?")).toBe(true);
     expect(isArtistDiscoveryRequest("What live music is going on tonight?")).toBe(false);

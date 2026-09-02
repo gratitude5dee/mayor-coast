@@ -9,8 +9,8 @@ export function isArtistDiscoveryRequest(value: string): boolean {
   const text = value.toLowerCase().replace(/\s+/gu, " ").trim();
   return (
     /\b(?:what|who) should i listen to\b/u.test(text) ||
-    /\b(?:put me on(?:to)?|put us on(?:to)?|what should i listen to|who should i listen to|recommend|suggest|share|show)\b.{0,48}\b(?:an? |new |bay |local )?(?:artist|musician|rapper|singer|band)\b/u.test(text) ||
-    /\b(?:bay(?: area)?|norcal|local)\s+(?:artist|music|musician|rapper|singer|band)\b/u.test(text) ||
+    /\b(?:put (?:me|us) on(?:\s+to)?|recommend|suggest|share|show)\b.{0,48}\b(?:an? |new |bay |local )?(?:artists?|musicians?|rappers?|singers?|bands?)\b/u.test(text) ||
+    /\b(?:bay(?: area)?|norcal|local)\s+(?:artists?|music|musicians?|rappers?|singers?|bands?)\b/u.test(text) ||
     /\b(?:music|artist)\s+(?:recommendation|recommendations|rec|recs)\b/u.test(text)
   );
 }

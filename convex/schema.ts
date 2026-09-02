@@ -214,6 +214,22 @@ export default defineSchema({
     .index("by_sender_hash", ["senderHash"])
     .index("by_status_updated", ["status", "updatedAtMs"]),
 
+  // Public-only, independently curated artist catalog. Contact information,
+  // source routes, and notes never enter this table.
+  coastArtists: defineTable({
+    externalId: v.string(),
+    displayName: v.string(),
+    lane: v.string(),
+    regionAnchor: v.string(),
+    instagramUrl: v.string(),
+    status: v.literal("verified"),
+    catalogVersion: v.string(),
+    createdAtMs: v.number(),
+    updatedAtMs: v.number(),
+  })
+    .index("by_externalId", ["externalId"])
+    .index("by_status_externalId", ["status", "externalId"]),
+
   coastPreferences: defineTable({
     userId: v.id("coastUsers"),
     namespace: v.string(),
@@ -226,6 +242,20 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_user_key", ["userId", "namespace", "key"]),
+
+  coastArtistShares: defineTable({
+    userId: v.id("coastUsers"),
+    artistId: v.id("coastArtists"),
+    artistExternalId: v.string(),
+    turnId: v.id("coastTurns"),
+    deliveryId: v.id("outboundDeliveries"),
+    shareKind: v.union(v.literal("direct"), v.literal("automatic")),
+    localDayKey: v.string(),
+    createdAtMs: v.number(),
+  })
+    .index("by_user_created", ["userId", "createdAtMs"])
+    .index("by_user_day_kind", ["userId", "localDayKey", "shareKind"])
+    .index("by_delivery", ["deliveryId"]),
 
   coastThreads: defineTable({
     userId: v.id("coastUsers"),

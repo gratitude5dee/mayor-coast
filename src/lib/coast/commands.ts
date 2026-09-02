@@ -38,7 +38,7 @@ export function buildCommandResult(command: CoastCommand): CoastCommandResult {
         command,
         requiresLifecycleMutation: false,
         plan: emptyTurnPlan(
-          "I’m COAST, SF’s unofficial AI concierge. Tell me your mood, neighborhood, timing, and budget; I’ll pull a source-backed move from the city guide. Text STOP to pause or FORGET ME to erase your saved history.",
+          "I’m COAST, your unofficial mayor of SF. Tell me your mood, neighborhood, timing, and budget; I’ll pull a source-backed move from the city guide. Text STOP to pause or FORGET ME to erase your saved history.",
         ),
       };
     case "stop":

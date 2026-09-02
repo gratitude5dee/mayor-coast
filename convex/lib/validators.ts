@@ -219,6 +219,7 @@ export const outboundStage = v.union(
   v.literal("reservation_action"),
   v.literal("location_request"),
   v.literal("maps_card"),
+  v.literal("artist_drop"),
   v.literal("poll"),
 );
 
@@ -350,6 +351,10 @@ export const turnPlan = v.object({
         targetExternalId: v.string(),
         startAtMs: v.number(),
         endAtMs: v.optional(v.union(v.number(), v.null())),
+      }),
+      v.object({
+        type: v.literal("share_artist"),
+        shareKind: v.union(v.literal("direct"), v.literal("automatic")),
       }),
     ),
   ),

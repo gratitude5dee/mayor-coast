@@ -10,7 +10,7 @@ export default function Home() {
           <div>
             <h1>Meet COAST.</h1>
             <p className={styles.lede}>
-              The unofficial AI concierge for the city—events, dinner, drinks,
+              Your unofficial mayor for the city—events, dinner, drinks,
               and a whole night that actually fits you.
             </p>
           </div>

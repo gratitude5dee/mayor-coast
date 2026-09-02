@@ -10,37 +10,37 @@ import {
   COAST_SYSTEM_PROMPT,
   withCoastFirstTurnIntro,
 } from "../src/lib/coast/persona";
+import { isArtistDiscoveryRequest } from "../src/lib/coast/artists";
+import artistCatalog from "../data/artists/bay-norcal-public-v1.json";
 
 describe("COAST persona", () => {
-  it("defines a transparent unofficial-mayor identity and measured slang", () => {
+  it("defines the unofficial-mayor identity and measured Bay flavor", () => {
     expect(COAST_SYSTEM_PROMPT).toContain(
-      "SF’s unofficial mayor—an AI concierge",
+      "San Francisco’s unofficial mayor and a source-backed city guide",
     );
     expect(COAST_SYSTEM_PROMPT).toContain("at most one local slang expression");
-    expect(COAST_SYSTEM_PROMPT).toContain("“Smackin’” is for food");
+    expect(COAST_SYSTEM_PROMPT).toContain("“Yee” is a light affirmative");
+    expect(COAST_SYSTEM_PROMPT).toContain("“smackin’” is for food");
     expect(COAST_SYSTEM_PROMPT).toContain(
-      "“slappin’” is for music or event energy",
+      "“that slaps” is for music or event energy",
     );
     expect(COAST_SYSTEM_PROMPT).toContain(
       "never a claim of city employment, authority, or affiliation",
     );
+    expect(COAST_SYSTEM_PROMPT).not.toMatch(/\bAI\b/u);
   });
 
-  it("owns the first introduction in application code and never repeats it", () => {
-    expect(withCoastFirstTurnIntro("I found three moves.", true)).toBe(
-      `${COAST_FIRST_TURN_INTRO} I found three moves.`,
-    );
+  it("owns the exact first introduction in application code and never repeats it", () => {
+    expect(withCoastFirstTurnIntro("I found three moves.", true)).toBe(COAST_FIRST_TURN_INTRO);
     expect(withCoastFirstTurnIntro("I found three moves.", false)).toBe(
       "I found three moves.",
     );
     expect(
       withCoastFirstTurnIntro(
-        "COAST here, SF’s unofficial mayor—AI edition. I found three moves.",
+        COAST_FIRST_TURN_INTRO,
         true,
       ),
-    ).toBe(
-      "COAST here, SF’s unofficial mayor—AI edition. I found three moves.",
-    );
+    ).toBe(COAST_FIRST_TURN_INTRO);
   });
 
   it("encodes answer-first, confidence, continuity, and poll restraint rules", () => {
@@ -57,6 +57,37 @@ describe("COAST persona", () => {
     );
     expect(COAST_SYSTEM_PROMPT).toContain(
       "offering to compare two picks or sequence them into a night",
+    );
+  });
+});
+
+describe("Bay artist discovery", () => {
+  it("recognizes direct artist discovery without treating ordinary music events as artists", () => {
+    expect(isArtistDiscoveryRequest("Put me on to a new Bay artist")).toBe(true);
+    expect(isArtistDiscoveryRequest("What should I listen to?")).toBe(true);
+    expect(isArtistDiscoveryRequest("Any local music recommendations?")).toBe(true);
+    expect(isArtistDiscoveryRequest("What live music is going on tonight?")).toBe(false);
+  });
+
+  it("contains only the approved, verified public artist fields", () => {
+    expect(artistCatalog.inputRowCount).toBe(100);
+    expect(artistCatalog.acceptedCount).toBe(68);
+    expect(artistCatalog.withheldCount).toBe(32);
+    expect(artistCatalog.records).toHaveLength(68);
+    for (const artist of artistCatalog.records) {
+      expect(Object.keys(artist).sort()).toEqual([
+        "displayName",
+        "externalId",
+        "instagramUrl",
+        "lane",
+        "regionAnchor",
+        "status",
+      ]);
+      expect(artist.status).toBe("verified");
+      expect(artist.instagramUrl).toMatch(/^https:\/\/www\.instagram\.com\/[a-z0-9._]+\/$/u);
+    }
+    expect(JSON.stringify(artistCatalog)).not.toMatch(
+      /(?:email|phone|booking|management|contact(?:\s+tier)?|source\s*urls?|notes?)/iu,
     );
   });
 });

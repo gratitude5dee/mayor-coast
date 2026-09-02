@@ -1,6 +1,6 @@
 # COAST
 
-COAST is an unofficial AI concierge for San Francisco, delivered over iMessage. It uses Photon for the native messaging surface, raw OpenAI Responses behind an application-owned runtime, and Convex for the SF serving database and all durable operational state.
+COAST is San Francisco’s unofficial mayor, delivered over iMessage. It uses Photon for the native messaging surface, raw OpenAI Responses behind an application-owned runtime, and Convex for the SF serving database and all durable operational state.
 
 The implementation contract is documented in this repository’s source, tests, and architecture notes below.
 

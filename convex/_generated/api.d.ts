@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as artists from "../artists.js";
 import type * as chatState from "../chatState.js";
 import type * as checkIns from "../checkIns.js";
 import type * as crons from "../crons.js";
@@ -36,6 +37,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  artists: typeof artists;
   chatState: typeof chatState;
   checkIns: typeof checkIns;
   crons: typeof crons;

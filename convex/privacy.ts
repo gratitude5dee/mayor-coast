@@ -28,6 +28,15 @@ export const eraseUserBatch = internalMutation({
       processed += 1;
     }
 
+    const artistShares = await ctx.db
+      .query("coastArtistShares")
+      .withIndex("by_user_created", (q) => q.eq("userId", args.userId))
+      .take(BATCH_SIZE);
+    for (const share of artistShares) {
+      await ctx.db.delete(share._id);
+      processed += 1;
+    }
+
     const messages = await ctx.db
       .query("coastMessages")
       .withIndex("by_user_privacy_redacted", (q) =>
@@ -118,6 +127,7 @@ export const eraseUserBatch = internalMutation({
 
     const incomplete =
       preferences.length === BATCH_SIZE ||
+      artistShares.length === BATCH_SIZE ||
       messages.length === BATCH_SIZE ||
       checkIns.length === BATCH_SIZE ||
       polls.length === BATCH_SIZE ||

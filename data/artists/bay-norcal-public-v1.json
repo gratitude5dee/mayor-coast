@@ -1,0 +1,552 @@
+{
+  "catalogVersion": "bay-norcal-public-v1",
+  "inputRowCount": 100,
+  "acceptedCount": 68,
+  "withheldCount": 32,
+  "records": [
+    {
+      "externalId": "artist:instagram:_ymtk20_",
+      "displayName": "YMTK",
+      "lane": "R&B / rap",
+      "regionAnchor": "Oakland / Bay",
+      "instagramUrl": "https://www.instagram.com/_ymtk20_/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:08_zaybang",
+      "displayName": "Zay Bang",
+      "lane": "Rap",
+      "regionAnchor": "San Francisco",
+      "instagramUrl": "https://www.instagram.com/08_zaybang/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:1100himself",
+      "displayName": "1100 Himself",
+      "lane": "Rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/1100himself/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:22ndjim",
+      "displayName": "Offset Jim / 22nd Jim",
+      "lane": "Rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/22ndjim/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:24kgoldn",
+      "displayName": "24kGoldn",
+      "lane": "Rap-pop",
+      "regionAnchor": "San Francisco",
+      "instagramUrl": "https://www.instagram.com/24kgoldn/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:3rdworldlilblood",
+      "displayName": "Lil Blood",
+      "lane": "Rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/3rdworldlilblood/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:4karri",
+      "displayName": "Karri",
+      "lane": "R&B",
+      "regionAnchor": "San Francisco / Bay Area",
+      "instagramUrl": "https://www.instagram.com/4karri/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:8ro8",
+      "displayName": "8RO8",
+      "lane": "R&B / island-Bay fusion",
+      "regionAnchor": "Bay-adjacent / touring SF",
+      "instagramUrl": "https://www.instagram.com/8ro8/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:adrianmarcel",
+      "displayName": "Adrian Marcel",
+      "lane": "R&B",
+      "regionAnchor": "Oakland / Bay",
+      "instagramUrl": "https://www.instagram.com/adrianmarcel/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:astumusic",
+      "displayName": "ASTU",
+      "lane": "R&B / soul / alt-pop",
+      "regionAnchor": "Oakland / Bay",
+      "instagramUrl": "https://www.instagram.com/astumusic/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:audreymikaa",
+      "displayName": "Audrey Mika",
+      "lane": "Pop / R&B",
+      "regionAnchor": "Bay Area",
+      "instagramUrl": "https://www.instagram.com/audreymikaa/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:babybash",
+      "displayName": "Baby Bash",
+      "lane": "Rap / Latin-pop rap",
+      "regionAnchor": "Vallejo / Bay",
+      "instagramUrl": "https://www.instagram.com/babybash/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:babygas",
+      "displayName": "Baby Gas",
+      "lane": "Rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/babygas/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:berner415",
+      "displayName": "Berner",
+      "lane": "Rap / entrepreneur",
+      "regionAnchor": "San Francisco",
+      "instagramUrl": "https://www.instagram.com/berner415/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:brijean",
+      "displayName": "Brijean",
+      "lane": "Indie pop / percussion / dance",
+      "regionAnchor": "Bay Area / now broader West Coast",
+      "instagramUrl": "https://www.instagram.com/brijean/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:capolow304",
+      "displayName": "Capolow",
+      "lane": "Rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/capolow304/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:chowmane",
+      "displayName": "Chow Mane",
+      "lane": "Rap / Asian American hip-hop",
+      "regionAnchor": "San Jose / Bay",
+      "instagramUrl": "https://www.instagram.com/chowmane/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:cita_son",
+      "displayName": "Lil Yee",
+      "lane": "Melodic rap",
+      "regionAnchor": "San Francisco / Fillmore",
+      "instagramUrl": "https://www.instagram.com/cita_son/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:cookie_money",
+      "displayName": "Cookie Money",
+      "lane": "Rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/cookie_money/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:daofficialsulan",
+      "displayName": "Su'Lan",
+      "lane": "Rap duo",
+      "regionAnchor": "Oakland / Bay Area",
+      "instagramUrl": "https://www.instagram.com/daofficialsulan/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:destinyrogers",
+      "displayName": "Destiny Rogers",
+      "lane": "Pop / R&B",
+      "regionAnchor": "Lodi / NorCal",
+      "instagramUrl": "https://www.instagram.com/destinyrogers/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:drew_beez_",
+      "displayName": "Drew Beez",
+      "lane": "Rap",
+      "regionAnchor": "San Francisco / Hunters Point",
+      "instagramUrl": "https://www.instagram.com/drew_beez_/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:elujay",
+      "displayName": "Elujay",
+      "lane": "R&B / rap / producer",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/elujay/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:fantasticnegrito",
+      "displayName": "Fantastic Negrito",
+      "lane": "Blues / soul / rock",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/fantasticnegrito/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:goapele",
+      "displayName": "Goapele",
+      "lane": "R&B / soul",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/goapele/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:guapdad4000",
+      "displayName": "Guapdad 4000",
+      "lane": "Rap / melodic / personality-driven",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/guapdad4000/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:hermusicofficial",
+      "displayName": "H.E.R.",
+      "lane": "R&B / soul",
+      "regionAnchor": "Vallejo / Bay",
+      "instagramUrl": "https://www.instagram.com/hermusicofficial/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:iamfijiana",
+      "displayName": "Fijiana",
+      "lane": "Rap / Bay diaspora hip-hop",
+      "regionAnchor": "Richmond / Bay Area",
+      "instagramUrl": "https://www.instagram.com/iamfijiana/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:iamsu",
+      "displayName": "Iamsu!",
+      "lane": "Rap / producer",
+      "regionAnchor": "Richmond / HBK",
+      "instagramUrl": "https://www.instagram.com/iamsu/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:journeeofficial",
+      "displayName": "Journee",
+      "lane": "R&B",
+      "regionAnchor": "Bay Area",
+      "instagramUrl": "https://www.instagram.com/journeeofficial/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:jstalinlivewire",
+      "displayName": "J Stalin",
+      "lane": "Rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/jstalinlivewire/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:kamaiyah",
+      "displayName": "Kamaiyah",
+      "lane": "Rap / West Coast bounce",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/kamaiyah/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:kehlani",
+      "displayName": "Kehlani",
+      "lane": "R&B / pop",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/kehlani/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:ladona415",
+      "displayName": "La Doña",
+      "lane": "Latinx pop / reggaetón / Bay fusion",
+      "regionAnchor": "San Francisco",
+      "instagramUrl": "https://www.instagram.com/ladona415/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:larryjunetfm",
+      "displayName": "Larry June",
+      "lane": "Lifestyle rap",
+      "regionAnchor": "San Francisco / Hunters Point",
+      "instagramUrl": "https://www.instagram.com/larryjunetfm/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:larussell",
+      "displayName": "LaRussell",
+      "lane": "Independent rap",
+      "regionAnchor": "Vallejo",
+      "instagramUrl": "https://www.instagram.com/larussell/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:likybo15",
+      "displayName": "LikyBo",
+      "lane": "Rap / melodic",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/likybo15/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:lilbean",
+      "displayName": "Lil Bean",
+      "lane": "Melodic rap",
+      "regionAnchor": "San Francisco",
+      "instagramUrl": "https://www.instagram.com/lilbean/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:lilpete",
+      "displayName": "Lil Pete",
+      "lane": "Melodic street rap",
+      "regionAnchor": "San Francisco / Fillmore",
+      "instagramUrl": "https://www.instagram.com/lilpete/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:lolozouai",
+      "displayName": "Lolo Zouaï",
+      "lane": "Alt-R&B / pop",
+      "regionAnchor": "San Francisco-linked",
+      "instagramUrl": "https://www.instagram.com/lolozouai/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:mallybo_backinaction",
+      "displayName": "Mally Bo",
+      "lane": "Rap",
+      "regionAnchor": "San Francisco / Hunters Point",
+      "instagramUrl": "https://www.instagram.com/mallybo_backinaction/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:marcebassy",
+      "displayName": "Marc E. Bassy",
+      "lane": "Pop / R&B",
+      "regionAnchor": "Bay Area",
+      "instagramUrl": "https://www.instagram.com/marcebassy/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:marmaroso",
+      "displayName": "Marmar Oso",
+      "lane": "R&B / melodic",
+      "regionAnchor": "Sacramento / NorCal",
+      "instagramUrl": "https://www.instagram.com/marmaroso/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:msjanehandcock",
+      "displayName": "Jane Handcock",
+      "lane": "R&B / songwriter",
+      "regionAnchor": "Bay Area",
+      "instagramUrl": "https://www.instagram.com/msjanehandcock/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:nefthepharaoh",
+      "displayName": "Nef the Pharaoh",
+      "lane": "Rap / hyphy",
+      "regionAnchor": "Vallejo",
+      "instagramUrl": "https://www.instagram.com/nefthepharaoh/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:omb_peezy",
+      "displayName": "OMB Peezy",
+      "lane": "Rap",
+      "regionAnchor": "NorCal-linked / West Coast",
+      "instagramUrl": "https://www.instagram.com/omb_peezy/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:p_lo",
+      "displayName": "P-Lo",
+      "lane": "Rap / producer / Bay club",
+      "regionAnchor": "Pinole / Bay Area",
+      "instagramUrl": "https://www.instagram.com/p_lo/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:philthyrichfod",
+      "displayName": "Philthy Rich",
+      "lane": "Rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/philthyrichfod/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:prezi",
+      "displayName": "Prezi",
+      "lane": "Rap",
+      "regionAnchor": "San Francisco / Hunters Point",
+      "instagramUrl": "https://www.instagram.com/prezi/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:rayanajay",
+      "displayName": "Rayana Jay",
+      "lane": "R&B / soul",
+      "regionAnchor": "Richmond",
+      "instagramUrl": "https://www.instagram.com/rayanajay/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:rayvenjustice",
+      "displayName": "Rayven Justice",
+      "lane": "R&B / Bay rap-R&B",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/rayvenjustice/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:rexxliferaj",
+      "displayName": "Rexx Life Raj",
+      "lane": "Rap / melodic / conscious",
+      "regionAnchor": "Berkeley",
+      "instagramUrl": "https://www.instagram.com/rexxliferaj/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:rizzle.h2k",
+      "displayName": "RayRizzle",
+      "lane": "Rap",
+      "regionAnchor": "San Francisco / Sunnydale",
+      "instagramUrl": "https://www.instagram.com/rizzle.h2k/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:rochelle_jordan",
+      "displayName": "Rochelle Jordan",
+      "lane": "Alt-R&B / dance-R&B",
+      "regionAnchor": "Seed reference; Toronto/LA, not Bay-native",
+      "instagramUrl": "https://www.instagram.com/rochelle_jordan/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:sagethegemini",
+      "displayName": "Sage the Gemini",
+      "lane": "Rap / pop-rap",
+      "regionAnchor": "Fairfield / Bay-adjacent",
+      "instagramUrl": "https://www.instagram.com/sagethegemini/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:salamirosejoelouis",
+      "displayName": "Salami Rose Joe Louis",
+      "lane": "Experimental pop / jazz / electronic",
+      "regionAnchor": "Bay Area / California",
+      "instagramUrl": "https://www.instagram.com/salamirosejoelouis/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:samaria",
+      "displayName": "Samaria",
+      "lane": "R&B",
+      "regionAnchor": "Bay Area",
+      "instagramUrl": "https://www.instagram.com/samaria/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:saweetie",
+      "displayName": "Saweetie",
+      "lane": "Rap / pop-rap",
+      "regionAnchor": "Bay Area / Filipino Bay legacy",
+      "instagramUrl": "https://www.instagram.com/saweetie/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:seijioda",
+      "displayName": "Seiji Oda",
+      "lane": "Lo-fi hyphy / rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/seijioda/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:sonofpaper",
+      "displayName": "Son of Paper",
+      "lane": "Rap / Asian American Bay rap",
+      "regionAnchor": "San Francisco / Chinatown",
+      "instagramUrl": "https://www.instagram.com/sonofpaper/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:spellling",
+      "displayName": "SPELLLING",
+      "lane": "Experimental pop / art-pop",
+      "regionAnchor": "Oakland / Sacramento-linked",
+      "instagramUrl": "https://www.instagram.com/spellling/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:stunnaman02",
+      "displayName": "Stunnaman02 / StunnaMan",
+      "lane": "Rap / hyphy",
+      "regionAnchor": "Bay / Oakland-linked",
+      "instagramUrl": "https://www.instagram.com/stunnaman02/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:thereal_lilkayla",
+      "displayName": "Lil Kayla",
+      "lane": "Rap",
+      "regionAnchor": "San Francisco / Sunnydale",
+      "instagramUrl": "https://www.instagram.com/thereal_lilkayla/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:therealsymba",
+      "displayName": "Symba",
+      "lane": "Rap",
+      "regionAnchor": "Bay Area",
+      "instagramUrl": "https://www.instagram.com/therealsymba/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:theseshen",
+      "displayName": "The Seshen",
+      "lane": "Electronic soul / alt-R&B",
+      "regionAnchor": "San Francisco Bay Area",
+      "instagramUrl": "https://www.instagram.com/theseshen/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:thuymusic",
+      "displayName": "thuy",
+      "lane": "R&B / pop-R&B",
+      "regionAnchor": "Bay Area",
+      "instagramUrl": "https://www.instagram.com/thuymusic/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:victoriamonet",
+      "displayName": "Victoria Monét",
+      "lane": "R&B / pop",
+      "regionAnchor": "Sacramento / NorCal",
+      "instagramUrl": "https://www.instagram.com/victoriamonet/",
+      "status": "verified"
+    },
+    {
+      "externalId": "artist:instagram:whoisallblack",
+      "displayName": "ALLBLACK",
+      "lane": "Street rap",
+      "regionAnchor": "Oakland",
+      "instagramUrl": "https://www.instagram.com/whoisallblack/",
+      "status": "verified"
+    }
+  ]
+}

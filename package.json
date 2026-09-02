@@ -19,7 +19,9 @@
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy",
     "snapshot:verify": "node --import tsx scripts/verify-snapshot.ts",
-    "snapshot:import": "node --import tsx scripts/import-snapshot.ts"
+    "snapshot:import": "node --import tsx scripts/import-snapshot.ts",
+    "artists:build": "node --import tsx scripts/build-artist-catalog.ts",
+    "artists:import": "node --import tsx scripts/import-artists.ts"
   },
   "dependencies": {
     "@photon-ai/chat-adapter-imessage": "3.2.0",

@@ -10,7 +10,7 @@ import {
   shouldDeliverClarificationPoll,
   withNativeChoiceRecovery,
 } from "@/lib/agent";
-import { withCoastFirstTurnIntro } from "@/lib/coast";
+import { artistLeadIn, isArtistDiscoveryRequest, withCoastFirstTurnIntro } from "@/lib/coast";
 import { ConvexCoastDataSource, getConvexHttpClient } from "@/lib/convex";
 import { parseServerEnv } from "@/lib/env";
 import {
@@ -199,6 +199,26 @@ export async function POST(request: Request): Promise<Response> {
       priorSelections: input.priorSelections ?? [],
       clarificationDepth: input.clarificationDepth ?? 0,
     });
+    // Artist discovery is deliberately deterministic. The model never sees
+    // artist contact records or creates a destination URL.
+    if (isArtistDiscoveryRequest(latest.body)) {
+      return privateJson({
+        responseText: withCoastFirstTurnIntro(artistLeadIn("direct"), isFirstTurn),
+        selectedExternalIds: [],
+        poll: null,
+        preferenceUpdates: [],
+        provenanceIds: [],
+        modelRoute: "luna_high_fast",
+        routeReasons: ["deterministic_artist_discovery"],
+        modelSteps: 0,
+        toolCalls: 0,
+        retrievalMode: "none",
+        generationKind: "deterministic",
+        elapsedMs: Date.now() - startedAtMs,
+        serviceTier: null,
+        nextAction: { type: "share_artist", shareKind: "direct" },
+      });
+    }
     // Direct current-day event discovery is a fresh intent.  Keep it ahead of
     // calendar continuation so an old "Today" date poll cannot replay a hold.
     const calendarRequest = isTodayEventsRequest(latest.body)

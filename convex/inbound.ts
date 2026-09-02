@@ -32,7 +32,7 @@ function replyForCommand(
   isStopped: boolean,
 ) {
   if (command === "help") {
-    return "I’m COAST, an unofficial AI concierge for San Francisco. Tell me your timing, neighborhood, budget, and vibe. Text STOP to pause or FORGET ME to erase saved preferences and message history.";
+    return "I’m COAST, your unofficial mayor of SF. Tell me your timing, neighborhood, budget, and vibe. Text STOP to pause or FORGET ME to erase saved preferences and message history.";
   }
   if (command === "stop")
     return "COAST is paused. Text START whenever you want SF recommendations again.";

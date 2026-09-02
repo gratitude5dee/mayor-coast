@@ -7,6 +7,7 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  type MutationCtx,
 } from "./_generated/server";
 import { isServingExperienceEligible } from "./lib/servingEligibility";
 import { turnPlan } from "./lib/validators";
@@ -70,7 +71,8 @@ type RuntimeTurnPlan = {
         targetExternalId: string;
         startAtMs: number;
         endAtMs?: number | null;
-      };
+      }
+    | { type: "share_artist"; shareKind: "direct" | "automatic" };
 };
 
 function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
@@ -153,6 +155,11 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
           ? {}
           : { endAtMs: action.endAtMs === null ? null : Math.floor(action.endAtMs as number) }),
       };
+    } else if (
+      action.type === "share_artist" &&
+      (action.shareKind === "direct" || action.shareKind === "automatic")
+    ) {
+      normalizedNextAction = { type: "share_artist", shareKind: action.shareKind };
     } else {
       throw new Error("INVALID_PLAN_NEXT_ACTION");
     }
@@ -285,6 +292,7 @@ function stageRank(
     | "reservation_action"
     | "location_request"
     | "maps_card"
+    | "artist_drop"
     | "poll",
 ): number {
   if (stage === "response") return 0;
@@ -292,7 +300,68 @@ function stageRank(
   if (stage === "calendar_attachment") return 2;
   if (stage === "reservation_action") return 3;
   if (stage === "location_request" || stage === "maps_card") return 4;
+  if (stage === "artist_drop") return 4;
   return 4;
+}
+
+function sanFranciscoDayKey(nowMs: number): string {
+  const values = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    values.find((value) => value.type === type)?.value;
+  const year = part("year");
+  const month = part("month");
+  const day = part("day");
+  if (!year || !month || !day) throw new Error("SF_DAY_KEY_UNAVAILABLE");
+  return `${year}-${month}-${day}`;
+}
+
+function isEventOrNightlifeRecommendation(card: Doc<"sfExperienceCards">): boolean {
+  if (card.inferred.entityType === "event") return true;
+  const primaryType = card.inferred.primaryType?.toLowerCase() ?? "";
+  return /(?:nightclub|cocktail bar|wine bar|bar|brewery|dance)/u.test(primaryType);
+}
+
+async function selectArtistForTurn(
+  ctx: MutationCtx,
+  input: { userId: Id<"coastUsers">; shareKind: "direct" | "automatic"; localDayKey: string },
+) {
+  if (input.shareKind === "automatic") {
+    const deliveredToday = await ctx.db
+      .query("coastArtistShares")
+      .withIndex("by_user_day_kind", (q) =>
+        q.eq("userId", input.userId).eq("localDayKey", input.localDayKey).eq("shareKind", "automatic"),
+      )
+      .first();
+    if (deliveredToday !== null) return null;
+  }
+  const artists = await ctx.db
+    .query("coastArtists")
+    .withIndex("by_status_externalId", (q) => q.eq("status", "verified"))
+    .take(68);
+  if (artists.length === 0) return null;
+  const shares = await ctx.db
+    .query("coastArtistShares")
+    .withIndex("by_user_created", (q) => q.eq("userId", input.userId))
+    .order("desc")
+    .take(512);
+  const mostRecentByArtist = new Map<string, number>();
+  for (const share of shares) {
+    if (!mostRecentByArtist.has(share.artistExternalId)) {
+      mostRecentByArtist.set(share.artistExternalId, share.createdAtMs);
+    }
+  }
+  const unseen = artists.filter((artist) => !mostRecentByArtist.has(artist.externalId));
+  if (unseen.length > 0) return unseen[0] ?? null;
+  return [...artists].sort((left, right) =>
+    (mostRecentByArtist.get(left.externalId) ?? 0) -
+      (mostRecentByArtist.get(right.externalId) ?? 0) ||
+    left.externalId.localeCompare(right.externalId),
+  )[0] ?? null;
 }
 
 function compactError(error: unknown): string {
@@ -598,6 +667,30 @@ export const persistPlan = internalMutation({
       provenanceIds: args.plan.provenanceIds.filter((id) => authoritativeProvenance.has(id)),
     };
 
+    const localDayKey = sanFranciscoDayKey(args.nowMs);
+    // Only the deterministic artist-intent route can request a direct drop.
+    // Automatic drops are derived below from a real event/nightlife result.
+    const directArtistShare =
+      safePlan.nextAction?.type === "share_artist" &&
+      safePlan.nextAction.shareKind === "direct"
+        ? "direct"
+        : null;
+    const automaticArtistEligible =
+      directArtistShare === null &&
+      turn.origin !== "proactive" &&
+      safePlan.dailyAgendaExternalIds === undefined &&
+      safePlan.poll === null &&
+      safePlan.nextAction?.type !== "create_calendar" &&
+      selectedCards.some(isEventOrNightlifeRecommendation);
+    const artist = directArtistShare !== null || automaticArtistEligible
+      ? await selectArtistForTurn(ctx, {
+          userId: turn.userId,
+          shareKind: directArtistShare ?? "automatic",
+          localDayKey,
+        })
+      : null;
+    const artistShareKind = directArtistShare ?? "automatic";
+
     for (const update of safePlan.preferenceUpdates) {
       const existing = await ctx.db
         .query("coastPreferences")
@@ -634,6 +727,7 @@ export const persistPlan = internalMutation({
         | "experience_card"
         | "calendar_attachment"
         | "reservation_action"
+        | "artist_drop"
         | "poll";
       itemKey: string;
       payload: Record<string, unknown>;
@@ -654,6 +748,18 @@ export const persistPlan = internalMutation({
         itemKey: card.externalId,
         payload: { externalId: card.externalId },
         sequence: cardSequence,
+      });
+    }
+    if (artist !== null) {
+      stages.push({
+        stage: "artist_drop",
+        itemKey: artist.externalId,
+        payload: {
+          artistExternalId: artist.externalId,
+          shareKind: artistShareKind,
+          localDayKey,
+        },
+        sequence: stages.length,
       });
     }
     if (calendarCard !== null && safePlan.nextAction?.type === "create_calendar") {
@@ -852,6 +958,7 @@ export const claimNextDelivery = internalMutation({
         v.literal("reservation_action"),
         v.literal("location_request"),
         v.literal("maps_card"),
+        v.literal("artist_drop"),
         v.literal("poll"),
       ),
       payload: v.record(v.string(), v.any()),
@@ -1041,6 +1148,38 @@ export const recordDeliverySuccess = internalMutation({
               });
             }
           }
+        }
+      }
+    }
+    if (delivery.stage === "artist_drop") {
+      const artistExternalId = delivery.payload.artistExternalId;
+      const shareKind = delivery.payload.shareKind;
+      const localDayKey = delivery.payload.localDayKey;
+      if (
+        typeof artistExternalId === "string" &&
+        (shareKind === "direct" || shareKind === "automatic") &&
+        typeof localDayKey === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/u.test(localDayKey)
+      ) {
+        const existingShare = await ctx.db
+          .query("coastArtistShares")
+          .withIndex("by_delivery", (q) => q.eq("deliveryId", delivery._id))
+          .unique();
+        const artist = await ctx.db
+          .query("coastArtists")
+          .withIndex("by_externalId", (q) => q.eq("externalId", artistExternalId))
+          .unique();
+        if (existingShare === null && artist !== null && artist.status === "verified") {
+          await ctx.db.insert("coastArtistShares", {
+            userId: turn.userId,
+            artistId: artist._id,
+            artistExternalId: artist.externalId,
+            turnId: turn._id,
+            deliveryId: delivery._id,
+            shareKind,
+            localDayKey,
+            createdAtMs: args.nowMs,
+          });
         }
       }
     }

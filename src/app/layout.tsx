@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "COAST — San Francisco, on text",
   description:
-    "COAST is an unofficial AI concierge for finding what to do, eat, and drink in San Francisco.",
+    "COAST is San Francisco’s unofficial mayor for finding what to do, eat, and drink around town.",
   robots: { index: false, follow: false },
 };
 

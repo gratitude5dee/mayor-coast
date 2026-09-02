@@ -41,6 +41,7 @@ const requestSchema = z
       "reservation_action",
       "location_request",
       "maps_card",
+      "artist_drop",
       "poll",
     ]),
     payload: z.record(z.string(), z.unknown()),
@@ -166,6 +167,26 @@ export async function POST(request: Request): Promise<Response> {
             destination: deliveryExperience.destination,
             travelMode,
           }),
+        )
+      ).id;
+    } else if (input.stage === "artist_drop") {
+      const payload = z
+        .object({
+          artistExternalId: z.string().trim().min(1).max(120),
+          shareKind: z.enum(["direct", "automatic"]),
+          localDayKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u),
+        })
+        .strict()
+        .parse(input.payload);
+      const artist = await getConvexHttpClient(env.CONVEX_URL).query(
+        api.artists.getForDelivery,
+        { externalId: payload.artistExternalId },
+      );
+      if (artist === null) throw new Error("ARTIST_NOT_AVAILABLE");
+      providerMessageId = (
+        await adapter.postMessage(
+          threadId,
+          `Bay soundcheck: ${artist.displayName} — ${artist.lane}. Bay/NorCal connection: ${artist.regionAnchor}. Tap in: ${artist.instagramUrl}`,
         )
       ).id;
     } else {

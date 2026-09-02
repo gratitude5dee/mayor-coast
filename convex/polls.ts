@@ -15,6 +15,12 @@ export const POLL_SETTLE_MS = 2_000;
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const NEWER_INBOUND_TOLERANCE_MS = 2_000;
 
+function hasSemanticPollAction(
+  purpose: "clarification" | "agenda_filter" | "decision_confirm_checkin" | "arrival_status" | undefined,
+): boolean {
+  return purpose === "decision_confirm_checkin" || purpose === "arrival_status";
+}
+
 export const claimVote = internalMutation({
   args: {
     webhookId: v.string(),
@@ -193,7 +199,7 @@ export const claimVote = internalMutation({
         turnId: answerTurn._id,
         expectedRevision: revision,
       });
-      if (poll.purpose !== undefined) {
+      if (hasSemanticPollAction(poll.purpose)) {
         await ctx.scheduler.runAfter(POLL_SETTLE_MS, internal.checkIns.applySettledSemanticPoll, {
           pollId: poll._id,
           answerTurnId: answerTurn._id,
@@ -249,7 +255,10 @@ export const claimVote = internalMutation({
       revision: 1,
       messageIds: [messageId],
       carryForwardTurnIds: [poll.turnId],
-      clarificationDepth: Math.min(2, (sourceTurn?.clarificationDepth ?? 0) + 1),
+      clarificationDepth: Math.min(
+        2,
+        (sourceTurn?.clarificationDepth ?? 0) + (poll.purpose === "agenda_filter" ? 0 : 1),
+      ),
       scheduledForMs: args.receivedAtMs + POLL_SETTLE_MS,
       attemptCount: 0,
       createdAtMs: args.receivedAtMs,
@@ -274,7 +283,7 @@ export const claimVote = internalMutation({
       turnId,
       expectedRevision: 1,
     });
-    if (poll.purpose !== undefined) {
+    if (hasSemanticPollAction(poll.purpose)) {
       await ctx.scheduler.runAfter(POLL_SETTLE_MS, internal.checkIns.applySettledSemanticPoll, {
         pollId: poll._id,
         answerTurnId: turnId,

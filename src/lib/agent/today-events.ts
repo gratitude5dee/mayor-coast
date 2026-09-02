@@ -5,6 +5,18 @@ import type { AgentRunDiagnostics, AgentRunResult } from "./runtime";
 const SAN_FRANCISCO_TIME_ZONE = "America/Los_Angeles";
 const TODAY_EVENT_PATTERN =
   /\b(?:what(?:'s| is)|whats|wats).{0,32}\b(?:(?:going|goin)\s+on|happening)\b.{0,32}\b(?:tonight|toight|tonite|today|tn)\b|\b(?:events?|shows?|concerts?|parties?)\b.{0,32}\b(?:tonight|toight|tonite|today|tn)\b/iu;
+const MAX_DAILY_AGENDA_RESULTS = 30;
+export const DAILY_AGENDA_POLL_QUESTION = "Want a tighter event lane?";
+
+const AGENDA_FILTERS = [
+  { label: "Live music", categories: ["live_music"] },
+  { label: "DJs & dancing", categories: ["dj_dance", "nightlife_party"] },
+  { label: "Comedy", categories: ["comedy"] },
+  { label: "Arts & culture", categories: ["theatre_performance", "visual_arts", "film"] },
+  { label: "Food & drink", categories: ["food_drink", "market_pop_up"] },
+] as const;
+
+type AgendaFilter = (typeof AGENDA_FILTERS)[number] | { label: "Keep the full agenda"; categories: [] };
 
 type LocalDate = { year: number; month: number; day: number };
 
@@ -71,27 +83,98 @@ export function isTodayEventsRequest(message: string): boolean {
   return TODAY_EVENT_PATTERN.test(message.replace(/\s+/gu, " ").trim());
 }
 
-function toPlan(experiences: readonly ExperienceRecord[]): TurnPlan {
+/** Recognizes only COAST's own optional agenda poll, never free-form text. */
+export function agendaFilterFromPollReply(message: string): AgendaFilter | null {
+  const match = message.match(
+    /^poll answer:\s*want a tighter event lane\?\s*[—-]\s*(.+)$/iu,
+  );
+  if (!match?.[1]) return null;
+  const normalized = normalizeAgendaLabel(match[1]);
+  if (normalized === normalizeAgendaLabel("Keep the full agenda")) {
+    return { label: "Keep the full agenda", categories: [] };
+  }
+  return AGENDA_FILTERS.find(
+    (filter) => normalizeAgendaLabel(filter.label) === normalized,
+  ) ?? null;
+}
+
+function toPlan(
+  experiences: readonly ExperienceRecord[],
+  filter: AgendaFilter | null,
+): TurnPlan {
   if (experiences.length === 0) {
     return {
       responseText:
-        "I couldn’t verify a live SF event for today in this snapshot.",
+        filter === null
+          ? "I couldn’t verify a live SF event for today in this snapshot."
+          : `I couldn’t verify a ${filter.label.toLowerCase()} event still active today.`,
       selectedExternalIds: [],
+      dailyAgendaExternalIds: [],
       poll: null,
       preferenceUpdates: [],
       provenanceIds: [],
     };
   }
+  const poll = filter === null ? buildAgendaFilterPoll(experiences) : null;
   return {
     responseText:
-      experiences.length === 1
-        ? "Here’s the verified move on deck today."
-        : `Here are ${experiences.length} verified moves on deck today.`,
-    selectedExternalIds: experiences.map((item) => item.externalId),
-    poll: null,
+      filter === null
+        ? experiences.length === 1
+          ? "Here’s the verified SF move still on deck today."
+          : `I pulled the full verified SF agenda: ${experiences.length} events still on deck today.`
+        : filter.categories.length === 0
+          ? `Keeping it wide: ${experiences.length} verified SF events are still on deck today.`
+          : `${experiences.length} verified ${filter.label.toLowerCase()} move${experiences.length === 1 ? "" : "s"} still on deck today.`,
+    selectedExternalIds: [],
+    dailyAgendaExternalIds: experiences.map((item) => item.externalId),
+    poll,
+    ...(filter === null && poll !== null
+      ? { pollKind: "agenda_filter" as const }
+      : {}),
     preferenceUpdates: [],
-    provenanceIds: [...new Set(experiences.flatMap((item) => item.provenanceIds))],
+    provenanceIds: [...new Set(experiences.flatMap((item) => item.provenanceIds))].slice(0, 30),
   };
+}
+
+function buildAgendaFilterPoll(
+  experiences: readonly ExperienceRecord[],
+): TurnPlan["poll"] {
+  const available = AGENDA_FILTERS.filter((filter) =>
+    experiences.some((experience) =>
+      experience.eventCategories?.some((category) =>
+        filter.categories.some((expected) => expected === category.trim().toLowerCase()),
+      ),
+    ),
+  );
+  if (available.length < 2) return null;
+  return {
+    question: DAILY_AGENDA_POLL_QUESTION,
+    options: [...available.slice(0, 5).map((filter) => filter.label), "Keep the full agenda"],
+    multiple: false,
+  };
+}
+
+function normalizeAgendaLabel(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, " ").trim();
+}
+
+function hasAgendaCategory(
+  experience: ExperienceRecord,
+  categories: readonly string[],
+): boolean {
+  if (categories.length === 0) return true;
+  const actual = new Set(
+    (experience.eventCategories ?? [])
+      .map((category) => category.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return categories.some((category) => actual.has(category));
+}
+
+function agendaOrder(left: ExperienceRecord, right: ExperienceRecord): number {
+  const leftStart = left.startAtMs ?? Number.MAX_SAFE_INTEGER;
+  const rightStart = right.startAtMs ?? Number.MAX_SAFE_INTEGER;
+  return leftStart - rightStart || left.title.localeCompare(right.title) || left.externalId.localeCompare(right.externalId);
 }
 
 function isEventContext(value: string): boolean {
@@ -158,24 +241,37 @@ const DIRECT_EVENT_DIAGNOSTICS: AgentRunDiagnostics = {
 export async function resolveTodayEvents(input: {
   dataSource: CoastDataSource;
   nowMs: number;
+  filter?: AgendaFilter | null;
 }): Promise<AgentRunResult> {
   const window = currentSanFranciscoDay(input.nowMs);
-  const result = await input.dataSource.searchExperiences({
-    query: "events",
-    entityType: "event",
-    neighborhoods: [],
-    primaryTypes: [],
-    priceBands: [],
-    startAtMs: window.startAtMs,
-    endAtMs: window.endAtMs,
-    limit: 5,
-    matchMode: "observed",
-  });
+  const directEvents = input.dataSource.listActiveEvents === undefined
+    ? null
+    : await input.dataSource.listActiveEvents({
+      startAtMs: window.startAtMs,
+      endAtMs: window.endAtMs,
+      limit: MAX_DAILY_AGENDA_RESULTS,
+    });
+  const result = directEvents === null
+    ? await input.dataSource.searchExperiences({
+      query: "events",
+      entityType: "event",
+      neighborhoods: [],
+      primaryTypes: [],
+      priceBands: [],
+      startAtMs: window.startAtMs,
+      endAtMs: window.endAtMs,
+      limit: MAX_DAILY_AGENDA_RESULTS,
+      matchMode: "observed",
+    })
+    : { items: directEvents };
+  const filter = input.filter ?? null;
   const experiences = result.items
     .filter((item) => item.entityType === "event")
-    .slice(0, 5);
+    .filter((item) => hasAgendaCategory(item, filter?.categories ?? []))
+    .sort(agendaOrder)
+    .slice(0, MAX_DAILY_AGENDA_RESULTS);
   return {
-    plan: toPlan(experiences),
+    plan: toPlan(experiences, filter),
     stagedPreferenceUpdates: [],
     experiences,
     command: null,
@@ -214,7 +310,13 @@ export async function resolveExhaustedClarification(input: {
     ? null
     : await input.dataSource.searchExperiences({ ...base, matchMode: "inferred" });
   const experiences = (fallback?.items ?? observed.items).slice(0, 5);
-  const plan = toPlan(experiences);
+  const plan: TurnPlan = {
+    responseText: "",
+    selectedExternalIds: experiences.map((item) => item.externalId),
+    poll: null,
+    preferenceUpdates: [],
+    provenanceIds: [...new Set(experiences.flatMap((item) => item.provenanceIds))].slice(0, 30),
+  };
   return {
     plan: {
       ...plan,

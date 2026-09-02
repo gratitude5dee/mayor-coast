@@ -33,6 +33,11 @@ export const experienceCardObserved = v.object({
   canonicalUrl: v.string(),
   cardKind: v.string(),
   experienceFields: v.record(v.string(), v.any()),
+  media: v.optional(v.object({
+    imageUrl: v.string(),
+    sourceClaimId: v.string(),
+    sourceEntityExternalId: v.string(),
+  })),
   observedSummary: nullableString,
   retrievalTextObserved: v.string(),
   sourceUrls: v.array(v.string()),
@@ -274,6 +279,7 @@ export const checkInStatus = v.union(
 
 export const pollPurpose = v.union(
   v.literal("clarification"),
+  v.literal("agenda_filter"),
   v.literal("decision_confirm_checkin"),
   v.literal("arrival_status"),
 );
@@ -316,7 +322,9 @@ export const pollPlan = v.object({
 export const turnPlan = v.object({
   responseText: v.string(),
   selectedExternalIds: v.array(v.string()),
+  dailyAgendaExternalIds: v.optional(v.array(v.string())),
   poll: v.union(pollPlan, v.null()),
+  pollKind: v.optional(v.union(v.literal("clarification"), v.literal("agenda_filter"))),
   preferenceUpdates: v.array(preferenceUpdate),
   provenanceIds: v.array(v.string()),
   modelRoute,
@@ -376,6 +384,11 @@ export const experienceResult = v.object({
   h3R8: v.string(),
   provenanceIds: v.array(v.string()),
   experienceFields: v.record(v.string(), v.any()),
+  media: v.optional(v.union(v.object({
+    imageUrl: v.string(),
+    sourceClaimId: v.string(),
+    sourceEntityExternalId: v.string(),
+  }), v.null())),
   matchSource: v.union(v.literal("observed"), v.literal("inferred")),
 });
 

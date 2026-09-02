@@ -149,7 +149,7 @@ export const completeNearby = internalMutation({
       updatedAtMs: args.nowMs,
     });
     const stages: Array<{
-      stage: "response" | "experience_card" | "calendar_attachment";
+      stage: "response" | "experience_card";
       itemKey: string;
       payload: Record<string, unknown>;
     }> = [{ stage: "response", itemKey: "response", payload: { text: responseText } }];
@@ -159,13 +159,6 @@ export const completeNearby = internalMutation({
         itemKey: card.externalId,
         payload: { externalId: card.externalId },
       });
-      if (card.inferred.entityType === "event" && card.inferred.startAtUtcMs !== null) {
-        stages.push({
-          stage: "calendar_attachment",
-          itemKey: card.externalId,
-          payload: { externalId: card.externalId },
-        });
-      }
     }
     for (const [sequence, stage] of stages.entries()) {
       await ctx.db.insert("outboundDeliveries", {

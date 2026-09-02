@@ -20,6 +20,7 @@ import type * as lib_service_auth from "../lib/service_auth.js";
 import type * as lib_servingEligibility from "../lib/servingEligibility.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as locationRequests from "../locationRequests.js";
+import type * as mediaBackfill from "../mediaBackfill.js";
 import type * as pollGateway from "../pollGateway.js";
 import type * as polls from "../polls.js";
 import type * as privacy from "../privacy.js";
@@ -47,6 +48,7 @@ declare const fullApi: ApiFromModules<{
   "lib/servingEligibility": typeof lib_servingEligibility;
   "lib/validators": typeof lib_validators;
   locationRequests: typeof locationRequests;
+  mediaBackfill: typeof mediaBackfill;
   pollGateway: typeof pollGateway;
   polls: typeof polls;
   privacy: typeof privacy;

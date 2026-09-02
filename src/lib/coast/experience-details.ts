@@ -12,6 +12,7 @@ export type AuthoritativeExperienceDetails = {
   entityType: PresentationEntityType;
   experienceFields: Record<string, unknown>;
   externalId: string;
+  media?: { imageUrl: string } | null;
   neighborhoodId?: string | null;
   observedSummary: string;
   primaryType?: string | null;
@@ -42,6 +43,7 @@ export function presentationFromExperienceDetails(
       finiteMs(input.endAtUtcMs) ?? endAtMsFromExperienceFields(input.experienceFields),
     entityType: input.entityType,
     externalId: input.externalId,
+    imageUrl: input.media?.imageUrl ?? null,
     neighborhoodId: input.neighborhoodId ?? null,
     observedSummary: input.observedSummary,
     primaryType: input.primaryType ?? null,

@@ -122,6 +122,7 @@ function compactCard(
     h3R8: card.inferred.h3R8,
     provenanceIds: card.inferred.provenanceIds,
     experienceFields: card.observed.experienceFields,
+    media: card.observed.media ?? null,
     matchSource,
   } as const;
 }
@@ -328,6 +329,41 @@ export const searchExperiences = query({
         inferred.length > 0 ? ("inferred_fallback" as const) : ("observed" as const),
       results,
     };
+  },
+});
+
+/**
+ * Exact same-day agenda browse. The time window belongs in the index rather
+ * than a full-text result cap so a request for "all events today" cannot
+ * accidentally omit listings that do not contain the word "events".
+ */
+export const listActiveEvents = query({
+  args: {
+    startAtMs: v.number(),
+    endAtMs: v.number(),
+    nowMs: v.number(),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(experienceResult),
+  handler: async (ctx, args) => {
+    const startAtMs = Math.floor(args.startAtMs);
+    const endAtMs = Math.floor(args.endAtMs);
+    if (!Number.isFinite(startAtMs) || !Number.isFinite(endAtMs) || startAtMs >= endAtMs) {
+      return [];
+    }
+    const candidates = await ctx.db
+      .query("sfExperienceCards")
+      .withIndex("by_kind_start", (q) =>
+        q
+          .eq("inferred.entityType", "event")
+          .eq("inferred.activeStatus", "active")
+          .gte("inferred.startAtUtcMs", startAtMs)
+          .lt("inferred.startAtUtcMs", endAtMs),
+      )
+      .take(boundedLimit(args.limit));
+    return candidates
+      .filter((card) => isEligible(card, args.nowMs))
+      .map((card) => compactCard(card, "observed"));
   },
 });
 

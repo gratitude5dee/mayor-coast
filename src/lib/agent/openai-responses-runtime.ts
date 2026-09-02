@@ -43,6 +43,7 @@ import {
   type AgentRuntime,
 } from "./runtime";
 import {
+  agendaFilterFromPollReply,
   isTodayEventsRequest,
   resolveExhaustedClarification,
   resolveTodayEvents,
@@ -297,6 +298,14 @@ export class OpenAIResponsesRuntime implements AgentRuntime {
     }
 
     const nowMs = input.nowMs ?? Date.now();
+    const agendaFilter = agendaFilterFromPollReply(input.message);
+    if (agendaFilter !== null) {
+      return resolveTodayEvents({
+        dataSource: this.options.dataSource,
+        nowMs,
+        filter: agendaFilter,
+      });
+    }
     if (isTodayEventsRequest(input.message)) {
       return resolveTodayEvents({ dataSource: this.options.dataSource, nowMs });
     }

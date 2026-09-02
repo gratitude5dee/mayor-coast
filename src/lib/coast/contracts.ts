@@ -37,6 +37,8 @@ export const CoastPollSchema = z
   })
   .strict();
 
+export const PollKindSchema = z.enum(["clarification", "agenda_filter"]);
+
 /**
  * The model returns identifiers only. URLs and display facts are resolved from
  * Convex after validation, so a model-generated destination can never be sent.
@@ -55,8 +57,18 @@ export const TurnPlanSchema = z
   })
   .strict();
 
-export type TurnPlan = z.infer<typeof TurnPlanSchema>;
+/**
+ * These deterministic-only fields intentionally stay outside the Responses
+ * JSON schema: OpenAI Structured Outputs requires every model field to be
+ * required, while a normal model recommendation must remain a five-result
+ * plan. The durable Convex boundary validates them separately.
+ */
+export type TurnPlan = z.infer<typeof TurnPlanSchema> & {
+  dailyAgendaExternalIds?: string[];
+  pollKind?: z.infer<typeof PollKindSchema>;
+};
 export type CoastPoll = z.infer<typeof CoastPollSchema>;
+export type PollKind = z.infer<typeof PollKindSchema>;
 export type PreferenceUpdate = z.infer<typeof PreferenceUpdateSchema>;
 
 export type ExperienceEntityType = "event" | "place";
@@ -73,6 +85,8 @@ export interface ExperienceRecord {
   matchBasis: RetrievalMatchBasis;
   startAtMs?: number | null;
   endAtMs?: number | null;
+  eventCategories?: readonly string[];
+  imageUrl?: string | null;
   lifecycleStatus?: string | null;
 }
 

@@ -29,6 +29,11 @@ async function getExperience(experienceKey: string) {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const presentation = await getExperience((await params).experienceKey);
   if (presentation === null) return { title: "COAST" };
+  const fallbackImage = new URL(
+    "/coast-card.svg",
+    process.env.COAST_DELIVERY_URL ?? "https://mayor-blue.vercel.app",
+  ).toString();
+  const image = presentation.imageUrl ?? fallbackImage;
   return {
     title: presentation.title,
     description: presentation.description,
@@ -36,7 +41,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       title: presentation.title,
       description: presentation.description,
       url: presentation.canonicalUrl,
+      images: [{ url: image }],
     },
+    twitter: { card: "summary_large_image", images: [image] },
     robots: { index: false, follow: false },
   };
 }

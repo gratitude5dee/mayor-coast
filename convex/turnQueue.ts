@@ -14,6 +14,7 @@ import { turnPlan } from "./lib/validators";
 const MAX_MODEL_STEPS = 2;
 const MAX_TOOL_CALLS = 4;
 const MAX_SELECTED_RESULTS = 5;
+const MAX_DAILY_AGENDA_RESULTS = 30;
 const MAX_PREFERENCES_PER_TURN = 10;
 const MAX_CONTEXT_MESSAGES = 20;
 const MAX_CONTEXT_PREFERENCES = 50;
@@ -37,7 +38,9 @@ const LOCATION_RESOLUTION_DELAYS_MS = [
 type RuntimeTurnPlan = {
   responseText: string;
   selectedExternalIds: string[];
+  dailyAgendaExternalIds?: string[];
   poll: { question: string; options: string[] } | null;
+  pollKind?: "clarification" | "agenda_filter";
   preferenceUpdates: Array<{
     namespace: string;
     key: string;
@@ -75,7 +78,9 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
   const plan = value as Record<string, unknown>;
   const responseText = plan.responseText;
   const selectedExternalIds = plan.selectedExternalIds;
+  const dailyAgendaExternalIds = plan.dailyAgendaExternalIds;
   const poll = plan.poll;
+  const pollKind = plan.pollKind;
   const preferenceUpdates = plan.preferenceUpdates;
   const provenanceIds = plan.provenanceIds;
   const modelRoute = plan.modelRoute;
@@ -94,6 +99,14 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
     !selectedExternalIds.every((id) => typeof id === "string")
   ) {
     throw new Error("INVALID_PLAN_SELECTIONS");
+  }
+  if (
+    dailyAgendaExternalIds !== undefined &&
+    (!Array.isArray(dailyAgendaExternalIds) ||
+      dailyAgendaExternalIds.length > MAX_DAILY_AGENDA_RESULTS ||
+      !dailyAgendaExternalIds.every((id) => typeof id === "string"))
+  ) {
+    throw new Error("INVALID_PLAN_DAILY_AGENDA");
   }
 
   let normalizedNextAction: RuntimeTurnPlan["nextAction"];
@@ -210,6 +223,12 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
     };
     if (normalizedPoll.options.length < 2) throw new Error("INVALID_PLAN_POLL_OPTIONS");
   }
+  if (pollKind !== undefined && pollKind !== "clarification" && pollKind !== "agenda_filter") {
+    throw new Error("INVALID_PLAN_POLL_KIND");
+  }
+  if (pollKind === "agenda_filter" && (normalizedPoll === null || dailyAgendaExternalIds === undefined)) {
+    throw new Error("INVALID_PLAN_AGENDA_FILTER");
+  }
 
   if (!Array.isArray(preferenceUpdates) || preferenceUpdates.length > MAX_PREFERENCES_PER_TURN) {
     throw new Error("INVALID_PLAN_PREFERENCES");
@@ -238,7 +257,11 @@ function parseRuntimePlan(value: unknown): RuntimeTurnPlan {
   return {
     responseText,
     selectedExternalIds: [...new Set(selectedExternalIds)].slice(0, MAX_SELECTED_RESULTS),
+    ...(dailyAgendaExternalIds === undefined
+      ? {}
+      : { dailyAgendaExternalIds: [...new Set(dailyAgendaExternalIds)].slice(0, MAX_DAILY_AGENDA_RESULTS) }),
     poll: normalizedPoll,
+    ...(pollKind === undefined ? {} : { pollKind }),
     preferenceUpdates: normalizedPreferences,
     provenanceIds: [...new Set(provenanceIds)].slice(0, 100),
     modelRoute,
@@ -370,7 +393,10 @@ export const getGenerationContext = internalQuery({
       items: Array<{ externalId: string; title: string }>;
     }> = [];
     for (const priorTurn of priorTurns.reverse()) {
-      const externalIds = priorTurn.plan?.selectedExternalIds.slice(0, 5) ?? [];
+      const externalIds = [
+        ...(priorTurn.plan?.selectedExternalIds ?? []),
+        ...(priorTurn.plan?.dailyAgendaExternalIds ?? []),
+      ].slice(0, 5);
       const items: Array<{ externalId: string; title: string }> = [];
       for (const externalId of externalIds) {
         const card = await ctx.db
@@ -496,11 +522,16 @@ export const persistPlan = internalMutation({
       args.plan.modelSteps > MAX_MODEL_STEPS ||
       args.plan.toolCalls > MAX_TOOL_CALLS ||
       args.plan.selectedExternalIds.length > MAX_SELECTED_RESULTS ||
+      (args.plan.dailyAgendaExternalIds?.length ?? 0) > MAX_DAILY_AGENDA_RESULTS ||
       args.plan.preferenceUpdates.length > MAX_PREFERENCES_PER_TURN
     ) {
       return false;
     }
-    if (args.plan.poll !== null && (turn.clarificationDepth ?? 0) >= 2) {
+    if (
+      args.plan.poll !== null &&
+      args.plan.pollKind !== "agenda_filter" &&
+      (turn.clarificationDepth ?? 0) >= 2
+    ) {
       throw new Error("CLARIFICATION_DEPTH_EXHAUSTED");
     }
     if (
@@ -510,7 +541,7 @@ export const persistPlan = internalMutation({
       throw new Error("INVALID_POLL_OPTION_COUNT");
     }
 
-    const cards: Doc<"sfExperienceCards">[] = [];
+    const selectedCards: Doc<"sfExperienceCards">[] = [];
     for (const externalId of [...new Set(args.plan.selectedExternalIds)]) {
       const card = await ctx.db
         .query("sfExperienceCards")
@@ -519,8 +550,24 @@ export const persistPlan = internalMutation({
       if (card === null || !isServingExperienceEligible(card, args.nowMs)) {
         continue;
       }
-      cards.push(card);
+      selectedCards.push(card);
     }
+    const agendaCards: Doc<"sfExperienceCards">[] = [];
+    for (const externalId of [...new Set(args.plan.dailyAgendaExternalIds ?? [])]) {
+      const card = await ctx.db
+        .query("sfExperienceCards")
+        .withIndex("by_externalId", (q) => q.eq("externalId", externalId))
+        .unique();
+      if (
+        card === null ||
+        card.inferred.entityType !== "event" ||
+        !isServingExperienceEligible(card, args.nowMs)
+      ) {
+        continue;
+      }
+      agendaCards.push(card);
+    }
+    const cards = [...selectedCards, ...agendaCards];
 
     let calendarCard: Doc<"sfExperienceCards"> | null = null;
     if (args.plan.nextAction?.type === "create_calendar") {
@@ -544,7 +591,10 @@ export const persistPlan = internalMutation({
     const authoritativeProvenance = new Set(cards.flatMap((card) => card.inferred.provenanceIds));
     const safePlan = {
       ...args.plan,
-      selectedExternalIds: cards.map((card) => card.externalId),
+      selectedExternalIds: selectedCards.map((card) => card.externalId),
+      ...(args.plan.dailyAgendaExternalIds === undefined
+        ? {}
+        : { dailyAgendaExternalIds: agendaCards.map((card) => card.externalId) }),
       provenanceIds: args.plan.provenanceIds.filter((id) => authoritativeProvenance.has(id)),
     };
 
@@ -605,14 +655,6 @@ export const persistPlan = internalMutation({
         payload: { externalId: card.externalId },
         sequence: cardSequence,
       });
-      if (card.inferred.entityType === "event" && card.inferred.startAtUtcMs !== null) {
-        stages.push({
-          stage: "calendar_attachment",
-          itemKey: card.externalId,
-          payload: { externalId: card.externalId },
-          sequence: stages.length,
-        });
-      }
     }
     if (calendarCard !== null && safePlan.nextAction?.type === "create_calendar") {
       stages.push({
@@ -693,6 +735,9 @@ export const persistPlan = internalMutation({
         turnId: turn._id,
         question: safePlan.poll.question,
         options: safePlan.poll.options,
+        ...(safePlan.pollKind === undefined
+          ? {}
+          : { purpose: safePlan.pollKind }),
         status: "pending",
         createdAtMs: args.nowMs,
         expiresAtMs: args.nowMs + POLL_TTL_MS,

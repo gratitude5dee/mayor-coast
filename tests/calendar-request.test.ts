@@ -76,6 +76,15 @@ describe("deterministic calendar requests", () => {
       nowMs: NOW_MS,
     })).toBeNull();
   });
+
+  it("does not treat a fresh today-events request as a date reply for an older calendar hold", () => {
+    expect(resolveCalendarRequest({
+      latestMessage: "Any events going on today?",
+      recentInboundMessages: ["Calendar link for 5 PM at Kin Khao"],
+      priorSelections: selections,
+      nowMs: NOW_MS,
+    })).toBeNull();
+  });
 });
 
 describe("Apple Calendar attachment", () => {

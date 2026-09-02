@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="COAST, the unofficial mayor of SF">
+  <rect width="1200" height="630" fill="#111318"/>
+  <path d="M0 480C190 410 285 530 465 465S765 397 925 463s197-8 275-18v185H0Z" fill="#f7b842" opacity=".95"/>
+  <text x="78" y="240" fill="#f7b842" font-family="Arial, sans-serif" font-size="88" font-weight="700">COAST</text>
+  <text x="82" y="315" fill="#f5f5f5" font-family="Arial, sans-serif" font-size="36">the unofficial mayor of SF</text>
+</svg>

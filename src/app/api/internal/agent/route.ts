@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   buildAgentContextMessage,
   OpenAIResponsesAgentRuntime,
+  isTodayEventsRequest,
   resolveCalendarRequest,
   sanitizeAgentHistoryText,
   shouldDeliverClarificationPoll,
@@ -198,7 +199,11 @@ export async function POST(request: Request): Promise<Response> {
       priorSelections: input.priorSelections ?? [],
       clarificationDepth: input.clarificationDepth ?? 0,
     });
-    const calendarRequest = resolveCalendarRequest({
+    // Direct current-day event discovery is a fresh intent.  Keep it ahead of
+    // calendar continuation so an old "Today" date poll cannot replay a hold.
+    const calendarRequest = isTodayEventsRequest(latest.body)
+      ? null
+      : resolveCalendarRequest({
       latestMessage: latest.body,
       recentInboundMessages: input.messages
         .slice(0, latestInboundIndex)
@@ -206,7 +211,7 @@ export async function POST(request: Request): Promise<Response> {
         .map((message) => message.body),
       priorSelections: input.priorSelections ?? [],
       nowMs,
-    });
+      });
     if (calendarRequest?.kind === "clarify") {
       return privateJson({
         responseText: withCoastFirstTurnIntro(calendarRequest.responseText, isFirstTurn),
@@ -260,7 +265,7 @@ export async function POST(request: Request): Promise<Response> {
     if (calendarRequest?.kind === "lookup") {
       const lookup = await dataSource.searchExperiences({
         query: calendarRequest.title,
-        entityType: "place",
+        entityType: "any",
         neighborhoods: [],
         primaryTypes: [],
         priceBands: [],
@@ -269,10 +274,57 @@ export async function POST(request: Request): Promise<Response> {
         limit: 3,
         matchMode: "observed",
       });
-      const experience = lookup.items.find((item) =>
-        item.entityType === "place" && samePlaceTitle(item.title, calendarRequest.title),
-      );
+      const experience = lookup.items.find((item) => samePlaceTitle(item.title, calendarRequest.title));
       if (experience) {
+        const observedEventStart = experience.entityType === "event"
+          ? experience.startAtMs ?? null
+          : null;
+        if (calendarRequest.startAtMs === null && observedEventStart !== null) {
+          return privateJson({
+            responseText: withCoastFirstTurnIntro(
+              `Locked: ${experience.title} is ready for your Calendar with its source-listed time and a 15-minute reminder. This is not a reservation—use the listing to confirm any RSVP or tickets.`,
+              isFirstTurn,
+            ),
+            selectedExternalIds: [],
+            poll: null,
+            preferenceUpdates: [],
+            provenanceIds: [],
+            modelRoute: "luna_high_fast",
+            routeReasons: ["deterministic_event_calendar_hold"],
+            modelSteps: 0,
+            toolCalls: 1,
+            retrievalMode: "observed",
+            generationKind: "deterministic",
+            elapsedMs: Date.now() - startedAtMs,
+            serviceTier: null,
+            nextAction: {
+              type: "create_calendar",
+              targetExternalId: experience.externalId,
+              startAtMs: observedEventStart,
+              endAtMs: experience.endAtMs ?? null,
+            },
+          });
+        }
+        if (calendarRequest.startAtMs === null) {
+          return privateJson({
+            responseText: withCoastFirstTurnIntro(
+              `What time should I hold for ${experience.title}?`,
+              isFirstTurn,
+            ),
+            selectedExternalIds: [],
+            poll: { question: "What time?", options: ["5 PM", "6 PM", "7 PM", "8 PM"] },
+            preferenceUpdates: [],
+            provenanceIds: [],
+            modelRoute: "luna_high_fast",
+            routeReasons: ["deterministic_calendar_clarification"],
+            modelSteps: 0,
+            toolCalls: 1,
+            retrievalMode: "observed",
+            generationKind: "deterministic",
+            elapsedMs: Date.now() - startedAtMs,
+            serviceTier: null,
+          });
+        }
         return privateJson({
           responseText: withCoastFirstTurnIntro(
             `Locked: a one-tap calendar hold for ${experience.title}, with a 15-minute reminder. This is not a reservation—use the booking or contact option I send next to confirm it.`,

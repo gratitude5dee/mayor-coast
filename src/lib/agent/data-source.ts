@@ -34,6 +34,12 @@ export interface SavePreferencesResult {
  * Pi adapter reuse the same deterministic retrieval and safety contract.
  */
 export interface CoastDataSource {
+  /** Indexed deterministic agenda browse; only used for current-day events. */
+  listActiveEvents?(input: {
+    startAtMs: number;
+    endAtMs: number;
+    limit: number;
+  }): Promise<readonly ExperienceRecord[]>;
   searchExperiences(
     input: SearchExperiencesInput,
   ): Promise<SearchExperiencesResult>;

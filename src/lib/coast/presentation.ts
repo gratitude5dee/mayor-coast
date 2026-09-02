@@ -8,6 +8,7 @@ export type ExperiencePresentationInput = {
   endAtMs?: number | null;
   entityType: PresentationEntityType;
   externalId: string;
+  imageUrl?: string | null;
   neighborhoodId?: string | null;
   observedSummary?: string | null;
   primaryType?: string | null;
@@ -25,6 +26,7 @@ export type ExperiencePresentation = {
   endAtMs: number | null;
   entityType: PresentationEntityType;
   externalId: string;
+  imageUrl: string | null;
   previewPath: string;
   startAtMs: number | null;
   title: string;
@@ -115,6 +117,9 @@ export function buildExperiencePresentation(
     endAtMs,
     entityType: input.entityType,
     externalId: input.externalId,
+    imageUrl: input.imageUrl === undefined || input.imageUrl === null
+      ? null
+      : safeExternalUrl(input.imageUrl),
     previewPath: experiencePreviewPath(input),
     startAtMs,
     title,

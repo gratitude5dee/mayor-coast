@@ -38,6 +38,7 @@ function fakeResponse(input: {
 
 function dataSource(): CoastDataSource {
   return {
+    listActiveEvents: vi.fn(async () => []),
     searchExperiences: vi.fn(async () => ({ items: [], weak: false })),
     getExperienceDetails: vi.fn(async () => []),
     getRecommendations: vi.fn(async () => []),
@@ -177,10 +178,7 @@ describe("OpenAIResponsesRuntime", () => {
       startAtMs: Date.parse("2026-09-02T03:00:00Z"),
     };
     const source = dataSource();
-    source.searchExperiences = vi.fn(async () => ({
-      items: [event],
-      weak: false,
-    }));
+    source.listActiveEvents = vi.fn(async () => [event]);
     const runtime = new OpenAIResponsesRuntime({
       responses: responses.api,
       dataSource: source,
@@ -193,30 +191,23 @@ describe("OpenAIResponsesRuntime", () => {
     });
 
     expect(responses.parse).not.toHaveBeenCalled();
-    expect(source.searchExperiences).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: "events",
-        entityType: "event",
-        limit: 5,
-        matchMode: "observed",
-      }),
-    );
+    expect(source.listActiveEvents).toHaveBeenCalledWith(expect.objectContaining({ limit: 30 }));
     expect(result.plan.poll).toBeNull();
-    expect(result.plan.selectedExternalIds).toEqual(["event:tonight"]);
+    expect(result.plan.selectedExternalIds).toEqual([]);
+    expect(result.plan.dailyAgendaExternalIds).toEqual(["event:tonight"]);
     expect(result.experiences.every((item) => item.entityType === "event")).toBe(true);
   });
 
   it("treats short Bay-Area shorthand like ‘goin tn’ as a direct event request", async () => {
     const responses = responsesQueue();
     const source = dataSource();
-    source.searchExperiences = vi.fn(async () => ({
-      items: [{
+    source.listActiveEvents = vi.fn(async () => [
+      {
         ...place("event:tn"),
         entityType: "event" as const,
         startAtMs: Date.parse("2026-09-02T03:00:00Z"),
-      }],
-      weak: false,
-    }));
+      },
+    ]);
     const runtime = new OpenAIResponsesRuntime({
       responses: responses.api,
       dataSource: source,
@@ -229,7 +220,58 @@ describe("OpenAIResponsesRuntime", () => {
     });
 
     expect(responses.parse).not.toHaveBeenCalled();
-    expect(result.plan.selectedExternalIds).toEqual(["event:tn"]);
+    expect(result.plan.dailyAgendaExternalIds).toEqual(["event:tn"]);
+  });
+
+  it("returns the complete current-day agenda in stable order and offers one optional type filter", async () => {
+    const responses = responsesQueue();
+    const source = dataSource();
+    const events = Array.from({ length: 17 }, (_, index): ExperienceRecord => ({
+      ...place(`event:${String(index).padStart(2, "0")}`),
+      entityType: "event",
+      title: `Event ${String(17 - index).padStart(2, "0")}`,
+      startAtMs: Date.parse("2026-09-01T18:00:00-07:00") + (16 - index) * 60_000,
+      eventCategories: index % 2 === 0 ? ["live_music"] : ["comedy"],
+    }));
+    source.listActiveEvents = vi.fn(async () => events);
+    const runtime = new OpenAIResponsesRuntime({ responses: responses.api, dataSource: source });
+
+    const result = await runtime.run({
+      message: "What events are going on today?",
+      pseudonymousUserId: "sender_hash",
+      nowMs: Date.parse("2026-09-01T12:00:00-07:00"),
+    });
+
+    expect(responses.parse).not.toHaveBeenCalled();
+    expect(result.plan.dailyAgendaExternalIds).toEqual(
+      Array.from({ length: 17 }, (_, index) => `event:${String(16 - index).padStart(2, "0")}`),
+    );
+    expect(result.plan.selectedExternalIds).toEqual([]);
+    expect(result.plan.poll).toEqual(expect.objectContaining({
+      question: "Want a tighter event lane?",
+      options: expect.arrayContaining(["Live music", "Comedy", "Keep the full agenda"]),
+    }));
+    expect(result.plan.pollKind).toBe("agenda_filter");
+  });
+
+  it("filters the same-day agenda after its optional poll without asking another question", async () => {
+    const responses = responsesQueue();
+    const source = dataSource();
+    source.listActiveEvents = vi.fn(async () => [
+      { ...place("event:music"), entityType: "event" as const, startAtMs: Date.parse("2026-09-02T02:00:00Z"), eventCategories: ["live_music"] },
+      { ...place("event:comedy"), entityType: "event" as const, startAtMs: Date.parse("2026-09-02T01:00:00Z"), eventCategories: ["comedy"] },
+    ]);
+    const runtime = new OpenAIResponsesRuntime({ responses: responses.api, dataSource: source });
+
+    const result = await runtime.run({
+      message: "Poll answer: Want a tighter event lane? — Comedy",
+      pseudonymousUserId: "sender_hash",
+      nowMs: Date.parse("2026-09-01T12:00:00-07:00"),
+    });
+
+    expect(responses.parse).not.toHaveBeenCalled();
+    expect(result.plan.dailyAgendaExternalIds).toEqual(["event:comedy"]);
+    expect(result.plan.poll).toBeNull();
   });
 
   it("broadens deterministically after two poll answers instead of creating a third poll", async () => {

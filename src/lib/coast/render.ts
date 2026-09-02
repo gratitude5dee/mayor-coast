@@ -50,6 +50,7 @@ export function renderCoastMessages(
       endAtMs: experience.endAtMs ?? null,
       entityType: experience.entityType,
       externalId: experience.externalId,
+      imageUrl: experience.imageUrl ?? null,
       neighborhoodId: experience.timingLabel,
       observedSummary: experience.observedSummary,
       startAtMs: experience.startAtMs ?? null,

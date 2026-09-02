@@ -9,10 +9,10 @@ export type CalendarRequestResolution =
       endAtMs: number | null;
     }
   | {
-      /** Resolve a named place through the verified corpus, never the model. */
+      /** Resolve a named experience through the verified corpus, never the model. */
       kind: "lookup";
       title: string;
-      startAtMs: number;
+      startAtMs: number | null;
       endAtMs: number | null;
     }
   | {
@@ -23,6 +23,7 @@ export type CalendarRequestResolution =
 
 const CALENDAR_INTENT = /\b(?:calendar|calender|add (?:it|this|that) to (?:my )?calendar|calendar (?:invite|link|hold))\b/iu;
 const CALENDAR_POLL_ANSWER = /^poll answer:\s*(?:what date|what time|which spot)\?/iu;
+const DIRECT_EVENT_INTENT = /\b(?:what(?:'s| is)|whats|wats).{0,32}\b(?:(?:going|goin)\s+on|happening)\b.{0,32}\b(?:tonight|toight|tonite|today|tn)\b|\b(?:events?|shows?|concerts?|parties?)\b.{0,32}\b(?:tonight|toight|tonite|today|tn)\b/iu;
 const MONTHS: Record<string, number> = {
   jan: 0,
   january: 0,
@@ -56,6 +57,11 @@ export function resolveCalendarRequest(input: {
   priorSelections: readonly AgentPriorSelectionSet[];
   nowMs: number;
 }): CalendarRequestResolution | null {
+  // A new event discovery request must never be treated as a date reply for a
+  // prior calendar hold merely because it contains the word "today".
+  if (DIRECT_EVENT_INTENT.test(input.latestMessage.replace(/\s+/gu, " ").trim())) {
+    return null;
+  }
   const history = [...input.recentInboundMessages, input.latestMessage].slice(-8);
   const calendarIndex = history.findLastIndex((message) => CALENDAR_INTENT.test(message));
   const continuing = CALENDAR_POLL_ANSWER.test(input.latestMessage) || looksLikeDateReply(input.latestMessage);
@@ -82,14 +88,9 @@ export function resolveCalendarRequest(input: {
 
   const time = parseTime(requestText);
   if (time === null) {
-    return {
-      kind: "clarify",
-      responseText: `What time should I hold for ${calendarTitle}?`,
-      poll: {
-        question: "What time?",
-        options: ["5 PM", "6 PM", "7 PM", "8 PM"],
-      },
-    };
+    // Resolve first: events use their observed start time; a place gets the
+    // existing time poll only after its canonical record is confirmed.
+    return { kind: "lookup", title: calendarTitle, startAtMs: null, endAtMs: null };
   }
 
   const date = parseLocalDate(requestText, input.nowMs);
@@ -146,6 +147,13 @@ export function resolveCalendarRequest(input: {
  * route must resolve the canonical external ID from Convex before delivery.
  */
 function extractNamedPlace(text: string): string | null {
+  const addToCalendar = [...text.matchAll(
+    /\b(?:add|put)\s+([a-z][a-z0-9&'’(). -]{1,80}?)\s+(?:to|on)\s+(?:my )?calendar\b/giu,
+  )]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter((value) => value.length >= 2)
+    .at(-1);
+  if (addToCalendar) return addToCalendar;
   const afterAt = [...text.matchAll(/\bat\s+([a-z][a-z0-9&'’(). -]{1,80})/giu)]
     .map((match) => match[1]?.trim() ?? "")
     .map((value) => value.replace(/\s+(?:today|tomorrow|tonight|toight|tonite|on\s+\w.+)$/iu, "").trim())

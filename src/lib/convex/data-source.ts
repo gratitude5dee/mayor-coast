@@ -26,6 +26,11 @@ type ConvexExperience = {
   startAtUtcMs: number | null;
   provenanceIds: string[];
   experienceFields: Record<string, unknown>;
+  media?: {
+    imageUrl: string;
+    sourceClaimId: string;
+    sourceEntityExternalId: string;
+  } | null;
   matchSource: "inferred" | "observed";
 };
 
@@ -94,6 +99,20 @@ export class ConvexCoastDataSource implements CoastDataSource {
     };
   }
 
+  async listActiveEvents(input: {
+    startAtMs: number;
+    endAtMs: number;
+    limit: number;
+  }): Promise<readonly ExperienceRecord[]> {
+    const results = await this.client.query(api.dataset.listActiveEvents, {
+      startAtMs: input.startAtMs,
+      endAtMs: input.endAtMs,
+      limit: Math.min(30, input.limit),
+      nowMs: this.nowMs,
+    });
+    return results.map((item) => this.mapExperience(item));
+  }
+
   async getExperienceDetails(
     externalIds: readonly string[],
   ): Promise<readonly ExperienceRecord[]> {
@@ -150,9 +169,22 @@ export class ConvexCoastDataSource implements CoastDataSource {
         "end_at_utc_ms",
         "endAtMs",
       ]) ?? item.endAtUtcMs ?? endAtMsFromExperienceFields(item.experienceFields),
+      eventCategories: stringArrayExperienceField(item.experienceFields, "eventCategories"),
+      imageUrl: item.media?.imageUrl ?? null,
       lifecycleStatus: item.activeStatus,
     };
   }
+}
+
+function stringArrayExperienceField(
+  fields: Record<string, unknown>,
+  key: string,
+): string[] {
+  const value = fields[key];
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean))].slice(0, 20);
 }
 
 function matchesArray(

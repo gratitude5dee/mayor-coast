@@ -11,6 +11,7 @@ import {
   expediteLocationRequestForThread,
 } from "./locationRequests";
 import { inboundClaimResult } from "./lib/validators";
+import { serviceSecretFingerprintHex } from "./lib/service_auth";
 
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const BURST_DEBOUNCE_MS = 150;
@@ -18,17 +19,25 @@ const LOCATION_REQUEST_TTL_MS = 2 * 60 * 1_000;
 
 function detectCommand(
   text: string,
-): "none" | "help" | "stop" | "start" | "forget_me" {
+): "none" | "help" | "stop" | "start" | "forget_me" | "credits" | "topup" | "disconnect_link" {
   const normalized = text.trim().replace(/\s+/g, " ").toUpperCase();
   if (normalized === "HELP") return "help";
   if (normalized === "STOP") return "stop";
   if (normalized === "START") return "start";
   if (normalized === "FORGET ME") return "forget_me";
+  if (normalized === "CREDITS") return "credits";
+  if (normalized === "TOPUP" || normalized === "TOP UP") return "topup";
+  if (normalized === "DISCONNECT LINK") return "disconnect_link";
   return "none";
 }
 
+function detectCreativeCommand(text: string): "imagine" | "zap" | "draw" | null {
+  const match = /^\s*\/(imagine|zap|draw)(?:\s+|$)/iu.exec(text);
+  return (match?.[1]?.toLowerCase() as "imagine" | "zap" | "draw" | undefined) ?? null;
+}
+
 function replyForCommand(
-  command: "none" | "help" | "stop" | "start" | "forget_me",
+  command: "none" | "help" | "stop" | "start" | "forget_me" | "credits" | "topup" | "disconnect_link",
   isStopped: boolean,
 ) {
   if (command === "help") {
@@ -41,6 +50,13 @@ function replyForCommand(
   if (command === "forget_me") {
     return "Got you. I’m erasing your saved preferences and message history; the minimal delivery-safety record stays pseudonymous.";
   }
+  if (command === "credits") {
+    return "Free allowance: 10 images and 10 videos per rolling 24 hours. Purchased credit carries forward and is used after free generations.";
+  }
+  if (command === "topup") {
+    return "Top-ups add $10 of generation credit for $9.99. Free generations are always used first; when an allowance is exhausted, COAST sends a one-tap Checkout link or Link approval request.";
+  }
+  if (command === "disconnect_link") return "Your Link wallet is disconnected from COAST. Existing purchased credit remains available.";
   if (isStopped)
     return "COAST is paused for this number. Text START to turn recommendations back on.";
   return "";
@@ -170,6 +186,9 @@ export const claimDelivery = internalMutation({
     unsupportedContent: v.optional(
       v.union(v.literal("attachment"), v.literal("private_location")),
     ),
+    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"))),
+    creativeCommandAmbiguous: v.optional(v.boolean()),
+    encryptedCreativePayload: v.optional(v.string()),
     receivedAtMs: v.number(),
   },
   returns: inboundClaimResult,
@@ -272,10 +291,17 @@ export const claimDelivery = internalMutation({
 
     // Defense in depth: even an authenticated caller cannot persist content
     // that it has classified as an attachment or private location share.
+    const creativeRequest = args.unsupportedContent === undefined && !args.locationSignal &&
+      (args.creativeCommand !== undefined || args.creativeCommandAmbiguous === true);
+    const creativeCommand = args.unsupportedContent || args.locationSignal || args.creativeCommandAmbiguous
+      ? null
+      : args.creativeCommand ?? detectCreativeCommand(args.text);
     const persistedText = args.locationSignal
       ? "[private location share omitted]"
       : args.unsupportedContent
         ? "[unsupported inbound content omitted]"
+        : creativeRequest
+          ? "[creative request omitted]"
         : args.text;
     const command = args.unsupportedContent || args.locationSignal ? "none" : detectCommand(args.text);
     const messageId = await ctx.db.insert("coastMessages", {
@@ -325,7 +351,12 @@ export const claimDelivery = internalMutation({
       };
     }
 
-    if (args.unsupportedContent) {
+    if (args.creativeCommandAmbiguous) {
+      controlReply = {
+        command,
+        text: "Please send exactly one creative command per request: /imagine, /zap, or /draw.",
+      };
+    } else if (args.unsupportedContent && creativeCommand === null) {
       controlReply = {
         command,
         text:
@@ -350,6 +381,7 @@ export const claimDelivery = internalMutation({
         args.receivedAtMs,
         "user_stopped",
       );
+      await cancelCreativeJobsInline(ctx, userId, args.receivedAtMs);
       controlReply = { command, text: replyForCommand(command, false) };
     } else if (command === "start") {
       await ctx.db.patch(userId, {
@@ -376,11 +408,26 @@ export const claimDelivery = internalMutation({
         args.receivedAtMs,
         "forget_requested",
       );
+      await cancelCreativeJobsInline(ctx, userId, args.receivedAtMs, true);
       controlReply = { command, text: replyForCommand(command, false) };
       await ctx.scheduler.runAfter(30_000, internal.privacy.eraseUserBatch, {
         userId,
       });
     } else if (command === "help") {
+      controlReply = { command, text: replyForCommand(command, false) };
+    } else if (command === "credits" || command === "topup") {
+      controlReply = {
+        command,
+        text: await creativeCommandReply(ctx, userId, command, args.receivedAtMs),
+      };
+    } else if (command === "disconnect_link") {
+      const connections = await ctx.db
+        .query("creativeLinkConnections")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .take(10);
+      for (const connection of connections) {
+        await ctx.db.patch(connection._id, { status: "revoked", encryptedAuth: "[revoked]", updatedAtMs: args.receivedAtMs });
+      }
       controlReply = { command, text: replyForCommand(command, false) };
     } else if (user.status === "stopped") {
       controlReply = { command, text: replyForCommand(command, true) };
@@ -629,7 +676,51 @@ export const claimDelivery = internalMutation({
           : await ctx.db.get(thread.activeTurnId);
       const scheduledForMs = args.receivedAtMs + BURST_DEBOUNCE_MS;
 
-      if (activeTurn?.state === "debouncing") {
+      if (
+        activeTurn?.state === "debouncing" &&
+        creativeCommand !== null &&
+        activeTurn.creativeCommand !== undefined &&
+        activeTurn.creativeCommand !== creativeCommand
+      ) {
+        turnId = activeTurn._id;
+        const responseText = "Please send one creative command at a time: /imagine or /zap.";
+        await ctx.db.patch(activeTurn._id, {
+          state: "response_planned",
+          plan: {
+            responseText,
+            selectedExternalIds: [],
+            poll: null,
+            preferenceUpdates: [],
+            provenanceIds: [],
+            modelRoute: "luna_low",
+            routeReasons: ["ambiguous_creative_burst"],
+            modelSteps: 0,
+            toolCalls: 0,
+            retrievalMode: "none",
+          },
+          updatedAtMs: args.receivedAtMs,
+        });
+        await ctx.db.insert("outboundDeliveries", {
+          turnId,
+          threadId,
+          stage: "response",
+          sequence: 0,
+          itemKey: "ambiguous-creative-command",
+          idempotencyKey: `${turnId}:ambiguous-creative-command`,
+          payload: { text: responseText },
+          status: "pending",
+          attemptCount: 0,
+          nextAttemptAtMs: args.receivedAtMs,
+          createdAtMs: args.receivedAtMs,
+          updatedAtMs: args.receivedAtMs,
+        });
+        await ctx.db.patch(messageId, { turnId });
+        await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
+      } else if (
+        activeTurn?.state === "debouncing" &&
+        creativeCommand === null &&
+        activeTurn.creativeCommand === undefined
+      ) {
         turnId = activeTurn._id;
         const revision = activeTurn.revision + 1;
         await ctx.db.patch(turnId, {
@@ -652,6 +743,7 @@ export const claimDelivery = internalMutation({
         const messageIds: Id<"coastMessages">[] = [messageId];
         if (
           activeTurn !== null &&
+          creativeCommand === null &&
           activeTurn.state !== "sent" &&
           activeTurn.state !== "failed" &&
           activeTurn.state !== "cancelled" &&
@@ -684,13 +776,14 @@ export const claimDelivery = internalMutation({
         turnId = await ctx.db.insert("coastTurns", {
           userId,
           threadId,
-          state: "debouncing",
+          state: creativeCommand === null ? "debouncing" : "response_planned",
           revision: 1,
           messageIds: [...new Set(messageIds)],
           carryForwardTurnIds: [...new Set(carryForwardTurnIds)],
           // A typed free-form message is a fresh discovery request. Poll votes
           // continue their lineage through convex/polls.ts instead.
           clarificationDepth: 0,
+          ...(creativeCommand === null ? {} : { creativeCommand }),
           scheduledForMs,
           attemptCount: 0,
           createdAtMs: args.receivedAtMs,
@@ -701,14 +794,110 @@ export const claimDelivery = internalMutation({
           activeTurnId: turnId,
           updatedAtMs: args.receivedAtMs,
         });
-        await ctx.scheduler.runAfter(
-          BURST_DEBOUNCE_MS,
-          internal.turnQueue.beginGeneration,
-          {
-            turnId,
-            expectedRevision: 1,
+        if (creativeCommand === null) {
+          await ctx.scheduler.runAfter(
+            BURST_DEBOUNCE_MS,
+            internal.turnQueue.beginGeneration,
+            { turnId, expectedRevision: 1 },
+          );
+        }
+      }
+    }
+
+    // Admission is atomic with the inbound claim. The actual provider call is
+    // performed by a later worker, so retries can poll a known request ID and
+    // never submit a duplicate paid render.
+    if (
+      creativeCommand !== null &&
+      args.encryptedCreativePayload !== undefined &&
+      controlReply === null &&
+      command === "none"
+    ) {
+      const admitted = await admitCreativeInline(ctx, {
+        userId,
+        threadId,
+        sourceMessageId: messageId,
+        turnId,
+        requestKey: `${args.webhookId}:${args.providerMessageId}`,
+        command: creativeCommand,
+        encryptedPayload: args.encryptedCreativePayload,
+        nowMs: args.receivedAtMs,
+      });
+      if (admitted.state === "busy") {
+        await ctx.db.insert("outboundDeliveries", {
+          turnId,
+          threadId,
+          stage: "response",
+          sequence: 0,
+          itemKey: "creative-pending",
+          idempotencyKey: `${turnId}:creative-pending`,
+          payload: { text: "Your previous creative request is still running. I’ll finish it before accepting another." },
+          status: "pending",
+          attemptCount: 0,
+          nextAttemptAtMs: args.receivedAtMs,
+          createdAtMs: args.receivedAtMs,
+          updatedAtMs: args.receivedAtMs,
+        });
+        await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
+      } else if (admitted.state === "awaiting_payment") {
+        const noun = creativeCommand === "zap" ? "videos" : "images";
+        const text = `You’ve used your 10 free ${noun} for now. Add $10 credit for $9.99: images are $0.50 and 15-second videos are $1. Connect Link for future top-ups, or pay directly here.`;
+        await ctx.db.insert("outboundDeliveries", {
+          turnId,
+          threadId,
+          stage: "billing",
+          sequence: 0,
+          itemKey: "topup",
+          idempotencyKey: `${turnId}:billing:topup`,
+          payload: {
+            text,
+            ...(admitted.topupOrderId === undefined ? {} : { orderId: admitted.topupOrderId }),
           },
-        );
+          status: "pending",
+          attemptCount: 0,
+          nextAttemptAtMs: args.receivedAtMs,
+          createdAtMs: args.receivedAtMs,
+          updatedAtMs: args.receivedAtMs,
+        });
+        await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
+      } else {
+        if (creativeCommand === "draw" && "drawSessionId" in admitted && admitted.drawSessionId && admitted.launchSecret) {
+          await ctx.db.insert("outboundDeliveries", {
+            turnId,
+            threadId,
+            stage: "draw_card",
+            sequence: 0,
+            itemKey: "draw-card",
+            idempotencyKey: `${turnId}:draw-card`,
+            payload: { sessionId: admitted.drawSessionId, launchSecret: admitted.launchSecret },
+            status: "pending",
+            attemptCount: 0,
+            nextAttemptAtMs: args.receivedAtMs,
+            createdAtMs: args.receivedAtMs,
+            updatedAtMs: args.receivedAtMs,
+          });
+        } else {
+          await ctx.db.insert("outboundDeliveries", {
+            turnId,
+            threadId,
+            stage: "response",
+            sequence: 0,
+            itemKey: "creative-accepted",
+            idempotencyKey: `${turnId}:creative-accepted`,
+            payload: { text: "Got it — I’m creating that now." },
+            status: "pending",
+            attemptCount: 0,
+            nextAttemptAtMs: args.receivedAtMs,
+            createdAtMs: args.receivedAtMs,
+            updatedAtMs: args.receivedAtMs,
+          });
+        }
+        await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
+        const job = await ctx.db
+          .query("creativeJobs")
+          .withIndex("by_request_key", (q) => q.eq("requestKey", `${args.webhookId}:${args.providerMessageId}`))
+          .unique();
+        if (job !== null && creativeCommand !== "draw") await ctx.scheduler.runAfter(0, internal.creative.run, { jobId: job._id });
       }
     }
 
@@ -739,6 +928,155 @@ export const claimDelivery = internalMutation({
     };
   },
 });
+
+async function creativeCommandReply(
+  ctx: MutationCtx,
+  userId: Id<"coastUsers">,
+  command: "credits" | "topup",
+  nowMs: number,
+): Promise<string> {
+  const usage = await ctx.db
+    .query("creativeUsage")
+    .withIndex("by_user_kind_admitted", (q) => q.eq("userId", userId))
+    .take(100);
+  const windowStart = nowMs - 24 * 60 * 60 * 1_000;
+  const images = usage.filter((item) => item.kind === "image" && item.admittedAtMs > windowStart).length;
+  const videos = usage.filter((item) => item.kind === "video" && item.admittedAtMs > windowStart).length;
+  const ledger = await ctx.db
+    .query("creativeCreditLedger")
+    .withIndex("by_user_created", (q) => q.eq("userId", userId))
+    .collect();
+  const creditCents = ledger.reduce((sum, item) => sum + item.amountCents, 0);
+  if (command === "credits") {
+    return `Free remaining: ${Math.max(0, 10 - images)} images and ${Math.max(0, 10 - videos)} videos in the rolling 24-hour window. Purchased credit: $${(creditCents / 100).toFixed(2)}.`;
+  }
+  if (images < 10 || videos < 10) {
+    return `You still have free generations available: ${Math.max(0, 10 - images)} images and ${Math.max(0, 10 - videos)} videos. Free generations are used before purchased credit.`;
+  }
+  return "Add $10 of generation credit for $9.99. COAST will send a one-tap Checkout link, or you can connect Link for future approvals.";
+}
+
+async function cancelCreativeJobsInline(
+  ctx: MutationCtx,
+  userId: Id<"coastUsers">,
+  nowMs: number,
+  redact = false,
+): Promise<void> {
+  const jobs = await ctx.db
+    .query("creativeJobs")
+    .withIndex("by_user_state", (q) => q.eq("userId", userId))
+    .take(50);
+  for (const job of jobs) {
+    if (["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state)) continue;
+    if (job.reservationSource === "credit") {
+      await ctx.db.insert("creativeCreditLedger", {
+        userId,
+        jobId: job._id,
+        kind: "release",
+        amountCents: job.reservedCents,
+        idempotencyKey: `${job.reservationId}:cancel-release`,
+        createdAtMs: nowMs,
+      });
+    } else if (job.reservationSource === "free") {
+      const usage = await ctx.db
+        .query("creativeUsage")
+        .withIndex("by_reservation", (q) => q.eq("reservationId", job.reservationId))
+        .unique();
+      if (usage !== null) await ctx.db.delete(usage._id);
+    }
+    await ctx.db.patch(job._id, {
+      state: "cancelled",
+      ...(redact ? { encryptedPayload: "[redacted]" } : {}),
+      updatedAtMs: nowMs,
+    });
+  }
+}
+
+async function admitCreativeInline(
+  ctx: MutationCtx,
+  args: {
+    userId: Id<"coastUsers">;
+    threadId: Id<"coastThreads">;
+    sourceMessageId: Id<"coastMessages">;
+    turnId: Id<"coastTurns">;
+    requestKey: string;
+    command: "imagine" | "zap" | "draw";
+    encryptedPayload: string;
+    nowMs: number;
+  },
+) {
+  const existing = await ctx.db.query("creativeJobs").withIndex("by_request_key", (q) => q.eq("requestKey", args.requestKey)).unique();
+  if (existing !== null) return { state: existing.state };
+  const active = await ctx.db
+    .query("creativeJobs")
+    .withIndex("by_user_state", (q) => q.eq("userId", args.userId))
+    .take(20);
+  if (active.some((job) => !["delivered", "failed", "refused", "cancelled", "expired", "retryable_failure"].includes(job.state))) {
+    return { state: "busy" };
+  }
+  if (args.command === "draw") {
+    const launchSecret = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const sessionId = await ctx.db.insert("drawSessions", {
+      userId: args.userId,
+      threadId: args.threadId,
+      sourceMessageId: args.sourceMessageId,
+      turnId: args.turnId,
+      launchSecretHash: serviceSecretFingerprintHex(launchSecret),
+      encryptedLaunchSecret: serviceSecretFingerprintHex(launchSecret),
+      launchExpiresAtMs: args.nowMs + 15 * 60_000,
+      encryptedPayload: args.encryptedPayload,
+      status: "active",
+      createdAtMs: args.nowMs,
+      updatedAtMs: args.nowMs,
+      expiresAtMs: args.nowMs + 24 * 60 * 60_000,
+    });
+    return { state: "admitted", drawSessionId: sessionId, launchSecret };
+  }
+  const kind = args.command === "zap" ? "video" : "image";
+  const price = args.command === "zap" ? 100 : 50;
+  const usage = await ctx.db.query("creativeUsage").withIndex("by_user_kind_admitted", (q) => q.eq("userId", args.userId).eq("kind", kind)).take(100);
+  const free = usage.filter((item) => item.admittedAtMs > args.nowMs - 24 * 60 * 60 * 1_000).length < 10;
+  let source: "free" | "credit" | "payment" = free ? "free" : "payment";
+  if (!free) {
+    const ledger = await ctx.db.query("creativeCreditLedger").withIndex("by_user_created", (q) => q.eq("userId", args.userId)).collect();
+    if (ledger.reduce((sum, item) => sum + item.amountCents, 0) >= price) source = "credit";
+  }
+  const reservationId = `${args.requestKey}:reservation`;
+  const jobId = await ctx.db.insert("creativeJobs", {
+    userId: args.userId,
+    threadId: args.threadId,
+    sourceMessageId: args.sourceMessageId,
+    turnId: args.turnId,
+    requestKey: args.requestKey,
+    command: args.command,
+    state: source === "payment" ? "awaiting_payment" : "admitted",
+    encryptedPayload: args.encryptedPayload,
+    reservationSource: source,
+    reservedCents: source === "free" ? 0 : price,
+    reservationId,
+    createdAtMs: args.nowMs,
+    updatedAtMs: args.nowMs,
+    expiresAtMs: args.nowMs + 24 * 60 * 60 * 1_000,
+  });
+  if (source === "free") await ctx.db.insert("creativeUsage", { userId: args.userId, kind, jobId, reservationId, admittedAtMs: args.nowMs, settled: false });
+  if (source === "credit") await ctx.db.insert("creativeCreditLedger", { userId: args.userId, jobId, kind: "reserve", amountCents: -price, idempotencyKey: reservationId, createdAtMs: args.nowMs });
+  let topupOrderId: string | undefined;
+  if (source === "payment") {
+    topupOrderId = `ct_${args.requestKey.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(-48)}`;
+    await ctx.db.insert("creativeTopups", {
+      userId: args.userId,
+      orderId: topupOrderId,
+      paymentPath: "checkout",
+      status: "created",
+      chargeCents: 999,
+      creditCents: 1000,
+      savedJobId: jobId,
+      createdAtMs: args.nowMs,
+      updatedAtMs: args.nowMs,
+    });
+  }
+  return { state: source === "payment" ? "awaiting_payment" : "admitted", topupOrderId };
+}
 
 export const recordAcknowledgement = internalMutation({
   args: {

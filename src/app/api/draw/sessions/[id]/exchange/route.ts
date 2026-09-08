@@ -1,0 +1,20 @@
+import { z } from "zod";
+import { getConvexHttpClient } from "@/lib/convex";
+import { api } from "../../../../../../../convex/_generated/api";
+import { parseServerEnv } from "@/lib/env";
+import { drawCookieName } from "@/lib/draw/auth";
+import { privateJson } from "@/lib/security/internal-auth";
+
+export const runtime = "nodejs";
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const env = parseServerEnv(); const { id } = await params;
+    const body = z.object({ secret: z.string().min(20).max(256) }).parse(await request.json());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await getConvexHttpClient(env.CONVEX_URL).action((api.service as any).exchangeDrawSession, { serviceSecret: env.convexServiceSecret, sessionId: id as never, launchSecret: body.secret, nowMs: Date.now() });
+    if (!result) return privateJson({ error: "invalid_or_expired_session" }, { status: 401 });
+    const response = privateJson({ ok: true, expiresAtMs: result.expiresAtMs });
+    response.headers.append("set-cookie", `${drawCookieName(id)}=${result.browserToken}; Path=/draw/${encodeURIComponent(id)}; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor((result.expiresAtMs - Date.now()) / 1000)}`);
+    return response;
+  } catch { return privateJson({ error: "invalid_request" }, { status: 400 }); }
+}

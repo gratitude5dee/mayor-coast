@@ -66,6 +66,9 @@ export const claimInbound = action({
     unsupportedContent: v.optional(
       v.union(v.literal("attachment"), v.literal("private_location")),
     ),
+    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"))),
+    creativeCommandAmbiguous: v.optional(v.boolean()),
+    encryptedCreativePayload: v.optional(v.string()),
   },
   returns: inboundClaimResult,
   handler: async (ctx, args): Promise<InboundClaim> => {
@@ -81,7 +84,104 @@ export const claimInbound = action({
       ...(args.unsupportedContent
         ? { unsupportedContent: args.unsupportedContent }
         : {}),
+      ...(args.creativeCommand && args.encryptedCreativePayload
+        ? {
+            creativeCommand: args.creativeCommand,
+            encryptedCreativePayload: args.encryptedCreativePayload,
+          }
+        : {}),
+      ...(args.creativeCommandAmbiguous ? { creativeCommandAmbiguous: true } : {}),
       receivedAtMs: args.receivedAtMs,
+    });
+  },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const exchangeDrawSession: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), launchSecret: v.string(), nowMs: v.number() },
+  returns: v.union(v.object({ browserToken: v.string(), expiresAtMs: v.number() }), v.null()),
+  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runMutation(internal.creative.exchangeDrawSession, { sessionId: args.sessionId, launchSecret: args.launchSecret, nowMs: args.nowMs }); },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const getDrawSession: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), nowMs: v.number() },
+  returns: v.union(v.object({ sessionId: v.id("drawSessions"), userId: v.id("coastUsers"), threadId: v.id("coastThreads"), expiresAtMs: v.number(), activeJobId: v.union(v.id("creativeJobs"), v.null()), latestJobId: v.union(v.id("creativeJobs"), v.null()), status: v.string() }), v.null()),
+  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runQuery(internal.creative.getDrawSession, { sessionId: args.sessionId, browserTokenHash: args.browserTokenHash, nowMs: args.nowMs }); },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const admitDrawGeneration: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), inputMediaId: v.optional(v.id("creativeMedia")), nowMs: v.number() },
+  returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
+  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runMutation(internal.creative.admitDrawGeneration, args); },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const listDrawEvents: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), afterSequence: v.optional(v.number()), nowMs: v.number() },
+  returns: v.union(v.object({ events: v.array(v.object({ sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()) })), latest: v.union(v.number(), v.null()) }), v.null()),
+  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runQuery(internal.creative.listDrawEvents, args); },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const createDrawMedia: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), sourceUrl: v.string(), mimeType: v.string(), filename: v.string(), byteLength: v.number(), width: v.number(), height: v.number(), nowMs: v.number() },
+  returns: v.union(v.id("creativeMedia"), v.null()),
+  handler: async (ctx, args) => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runMutation(internal.creative.createDrawMedia, args);
+  },
+});
+
+export const getCreativeTopup = action({
+  args: { serviceSecret: v.string(), orderId: v.string() },
+  returns: v.union(
+    v.object({ userId: v.id("coastUsers"), orderId: v.string(), status: v.string(), chargeCents: v.number(), creditCents: v.number() }),
+    v.null(),
+  ),
+  handler: async (ctx, args): Promise<{ userId: Id<"coastUsers">; orderId: string; status: string; chargeCents: number; creditCents: number } | null> => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runQuery(internal.creative.getTopup, { orderId: args.orderId });
+  },
+});
+
+export const settleCreativeTopup = action({
+  args: { serviceSecret: v.string(), orderId: v.string(), eventId: v.string(), paymentIdentity: v.string(), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args): Promise<boolean> => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runMutation(internal.creative.addTopupCredit, {
+      orderId: args.orderId,
+      eventId: args.eventId,
+      paymentIdentity: args.paymentIdentity,
+      nowMs: args.nowMs,
+    });
+  },
+});
+
+export const getCreativeMedia = action({
+  args: { serviceSecret: v.string(), mediaId: v.id("creativeMedia"), nowMs: v.number() },
+  returns: v.union(
+    v.object({ sourceUrl: v.string(), mimeType: v.string(), filename: v.string(), expiresAtMs: v.number() }),
+    v.null(),
+  ),
+  handler: async (ctx, args): Promise<{ sourceUrl: string; mimeType: string; filename: string; expiresAtMs: number } | null> => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runQuery(internal.creative.getMedia, { mediaId: args.mediaId, nowMs: args.nowMs });
+  },
+});
+
+export const reverseCreativeTopup = action({
+  args: { serviceSecret: v.string(), orderId: v.string(), eventId: v.string(), paymentIdentity: v.string(), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args): Promise<boolean> => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runMutation(internal.creative.reverseTopupCredit, {
+      orderId: args.orderId,
+      eventId: args.eventId,
+      paymentIdentity: args.paymentIdentity,
+      nowMs: args.nowMs,
     });
   },
 });

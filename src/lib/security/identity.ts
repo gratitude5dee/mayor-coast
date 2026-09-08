@@ -53,6 +53,34 @@ function threadReferenceKey(secret: string): Buffer {
     .digest();
 }
 
+/** Encrypt short creative prompts before they cross into Convex. */
+export function encryptCreativePayload(payload: string, secret: string): string {
+  const plaintext = payload.trim();
+  if (!plaintext || plaintext.length > 65_536) throw new Error("Creative payload is invalid");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", threadReferenceKey(secret), iv);
+  cipher.setAAD(Buffer.from("coast-creative-payload-v1", "utf8"));
+  const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return ["v1", iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ciphertext.toString("base64url")].join(".");
+}
+
+export function decryptCreativePayload(value: string, secret: string): string {
+  const [version, ivValue, tagValue, ciphertextValue, extra] = value.split(".");
+  if (version !== "v1" || !ivValue || !tagValue || !ciphertextValue || extra !== undefined) {
+    throw new Error("Encrypted creative payload is malformed");
+  }
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", threadReferenceKey(secret), Buffer.from(ivValue, "base64url"));
+    decipher.setAAD(Buffer.from("coast-creative-payload-v1", "utf8"));
+    decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+    const plaintext = Buffer.concat([decipher.update(Buffer.from(ciphertextValue, "base64url")), decipher.final()]).toString("utf8");
+    if (!plaintext || plaintext.length > 65_536) throw new Error("invalid plaintext");
+    return plaintext;
+  } catch {
+    throw new Error("Encrypted creative payload could not be authenticated");
+  }
+}
+
 /**
  * Photon thread IDs contain the sender address. Convex receives only this
  * authenticated ciphertext; the plaintext exists solely at the Vercel edge.

@@ -214,6 +214,176 @@ export default defineSchema({
     .index("by_sender_hash", ["senderHash"])
     .index("by_status_updated", ["status", "updatedAtMs"]),
 
+  // Creative state is deliberately separate from concierge turns. Payloads
+  // are encrypted opaque values; prompts, media URLs, and attachment names
+  // never enter ordinary message history or logs.
+  creativeJobs: defineTable({
+    userId: v.id("coastUsers"),
+    threadId: v.id("coastThreads"),
+    sourceMessageId: v.id("coastMessages"),
+    turnId: v.id("coastTurns"),
+    requestKey: v.string(),
+    command: v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw")),
+    state: v.union(
+      v.literal("staging"), v.literal("awaiting_payment"), v.literal("admitted"),
+      v.literal("submitting"), v.literal("submission_unknown"), v.literal("queued"),
+      v.literal("running"), v.literal("ready_for_delivery"), v.literal("delivered"),
+      v.literal("retryable_failure"), v.literal("failed"), v.literal("refused"),
+      v.literal("cancelled"), v.literal("expired"),
+    ),
+    encryptedPayload: v.string(),
+    provider: v.optional(v.union(v.literal("gmi"), v.literal("fal"), v.literal("openai"))),
+    drawSessionId: v.optional(v.id("drawSessions")),
+    revisionKey: v.optional(v.string()),
+    inputMediaId: v.optional(v.id("creativeMedia")),
+    outputMediaId: v.optional(v.id("creativeMedia")),
+    fundingStatus: v.optional(v.union(v.literal("reserved"), v.literal("settled"), v.literal("released"), v.literal("awaiting_payment"))),
+    attemptId: v.optional(v.string()),
+    fencingToken: v.optional(v.number()),
+    submittedAtMs: v.optional(v.number()),
+    heartbeatAtMs: v.optional(v.number()),
+    lastErrorCode: v.optional(v.string()),
+    eventSequence: v.optional(v.number()),
+    providerRequestId: v.optional(v.string()),
+    reservationSource: v.union(v.literal("free"), v.literal("credit"), v.literal("payment")),
+    reservedCents: v.number(),
+    reservationId: v.string(),
+    deliveryId: v.optional(v.id("outboundDeliveries")),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAtMs: v.optional(v.number()),
+    createdAtMs: v.number(),
+    updatedAtMs: v.number(),
+    expiresAtMs: v.number(),
+  })
+    .index("by_request_key", ["requestKey"])
+    .index("by_delivery", ["deliveryId"])
+    .index("by_user_state", ["userId", "state"])
+    .index("by_session_created", ["drawSessionId", "createdAtMs"])
+    .index("by_lease", ["state", "leaseExpiresAtMs"])
+    .index("by_expiry", ["state", "expiresAtMs"]),
+
+  creativeMedia: defineTable({
+    jobId: v.optional(v.id("creativeJobs")),
+    drawSessionId: v.optional(v.id("drawSessions")),
+    userId: v.optional(v.id("coastUsers")),
+    role: v.optional(v.union(v.literal("input"), v.literal("preview"), v.literal("output"))),
+    byteLength: v.optional(v.number()),
+    width: v.optional(v.number()),
+    height: v.optional(v.number()),
+    deletionState: v.optional(v.union(v.literal("pending"), v.literal("deleting"), v.literal("deleted"))),
+    deletionLeaseUntilMs: v.optional(v.number()),
+    deletionAttempts: v.optional(v.number()),
+    threadId: v.id("coastThreads"),
+    sourceUrl: v.string(),
+    mimeType: v.string(),
+    filename: v.string(),
+    createdAtMs: v.number(),
+    expiresAtMs: v.number(),
+    deletedAtMs: v.optional(v.number()),
+  })
+    .index("by_job", ["jobId"])
+    .index("by_session", ["drawSessionId"])
+    .index("by_deletion_expiry", ["deletionState", "expiresAtMs"])
+    .index("by_expiry", ["expiresAtMs"]),
+
+  creativeUsage: defineTable({
+    userId: v.id("coastUsers"),
+    kind: v.union(v.literal("image"), v.literal("video")),
+    jobId: v.id("creativeJobs"),
+    reservationId: v.string(),
+    admittedAtMs: v.number(),
+    settled: v.boolean(),
+  })
+    .index("by_user_kind_admitted", ["userId", "kind", "admittedAtMs"])
+    .index("by_user_kind_settled", ["userId", "kind", "settled", "admittedAtMs"])
+    .index("by_reservation", ["reservationId"]),
+
+  creativeCreditAccounts: defineTable({
+    userId: v.id("coastUsers"),
+    balanceCents: v.number(),
+    reconciledAtMs: v.optional(v.number()),
+    activeJobId: v.optional(v.id("creativeJobs")),
+    updatedAtMs: v.number(),
+  }).index("by_user", ["userId"]),
+
+  drawSessions: defineTable({
+    userId: v.id("coastUsers"),
+    threadId: v.id("coastThreads"),
+    sourceMessageId: v.id("coastMessages"),
+    turnId: v.id("coastTurns"),
+    launchSecretHash: v.string(),
+    encryptedLaunchSecret: v.string(),
+    launchExpiresAtMs: v.number(),
+    launchConsumedAtMs: v.optional(v.number()),
+    browserTokenHash: v.optional(v.string()),
+    encryptedPayload: v.string(),
+    initialMediaId: v.optional(v.id("creativeMedia")),
+    activeJobId: v.optional(v.id("creativeJobs")),
+    latestJobId: v.optional(v.id("creativeJobs")),
+    status: v.union(v.literal("active"), v.literal("revoked"), v.literal("expired")),
+    createdAtMs: v.number(),
+    updatedAtMs: v.number(),
+    expiresAtMs: v.number(),
+  }).index("by_user_status", ["userId", "status"]).index("by_expiry", ["expiresAtMs"]),
+
+  drawEvents: defineTable({
+    sessionId: v.id("drawSessions"),
+    jobId: v.id("creativeJobs"),
+    sequence: v.number(),
+    kind: v.union(v.literal("state"), v.literal("preview"), v.literal("completed")),
+    state: v.string(),
+    mediaId: v.optional(v.id("creativeMedia")),
+    previewIndex: v.optional(v.number()),
+    createdAtMs: v.number(),
+  }).index("by_session_created", ["sessionId", "createdAtMs"]).index("by_job_sequence", ["jobId", "sequence"]),
+
+  creativeCreditLedger: defineTable({
+    userId: v.id("coastUsers"),
+    jobId: v.optional(v.id("creativeJobs")),
+    topupOrderId: v.optional(v.string()),
+    kind: v.union(v.literal("topup"), v.literal("reserve"), v.literal("release"), v.literal("settle"), v.literal("refund")),
+    amountCents: v.number(),
+    idempotencyKey: v.string(),
+    createdAtMs: v.number(),
+  })
+    .index("by_idempotency", ["idempotencyKey"])
+    .index("by_user_created", ["userId", "createdAtMs"]),
+
+  creativeTopups: defineTable({
+    userId: v.id("coastUsers"),
+    orderId: v.string(),
+    paymentPath: v.union(v.literal("checkout"), v.literal("link")),
+    status: v.union(v.literal("created"), v.literal("pending"), v.literal("succeeded"), v.literal("failed"), v.literal("refunded")),
+    chargeCents: v.literal(999),
+    creditCents: v.literal(1000),
+    stripePaymentId: v.optional(v.string()),
+    checkoutUrl: v.optional(v.string()),
+    savedJobId: v.optional(v.id("creativeJobs")),
+    createdAtMs: v.number(),
+    updatedAtMs: v.number(),
+  })
+    .index("by_order", ["orderId"])
+    .index("by_user_status", ["userId", "status"]),
+
+  creativePaymentEvents: defineTable({
+    eventId: v.string(),
+    paymentIdentity: v.string(),
+    orderId: v.string(),
+    createdAtMs: v.number(),
+  })
+    .index("by_event", ["eventId"])
+    .index("by_payment", ["paymentIdentity"]),
+
+  creativeLinkConnections: defineTable({
+    userId: v.id("coastUsers"),
+    encryptedAuth: v.string(),
+    status: v.union(v.literal("pending"), v.literal("connected"), v.literal("revoked")),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAtMs: v.optional(v.number()),
+    createdAtMs: v.number(),
+    updatedAtMs: v.number(),
+  }).index("by_user", ["userId"]),
+
   // Public-only, independently curated artist catalog. Contact information,
   // source routes, and notes never enter this table.
   coastArtists: defineTable({
@@ -309,6 +479,9 @@ export default defineSchema({
       v.literal("stop"),
       v.literal("start"),
       v.literal("forget_me"),
+      v.literal("credits"),
+      v.literal("topup"),
+      v.literal("disconnect_link"),
     ),
     reactionClaimedAtMs: v.optional(v.number()),
     readClaimedAtMs: v.optional(v.number()),
@@ -330,6 +503,7 @@ export default defineSchema({
     /** Clarification answers in this discovery lineage; hard-capped at two. */
     clarificationDepth: v.optional(v.number()),
     origin: v.optional(v.union(v.literal("inbound"), v.literal("proactive"))),
+    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"))),
     checkInId: v.optional(v.id("coastCheckIns")),
     plan: v.optional(turnPlan),
     scheduledForMs: v.number(),

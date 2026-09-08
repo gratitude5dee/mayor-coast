@@ -208,6 +208,9 @@ export const controlCommand = v.union(
   v.literal("stop"),
   v.literal("start"),
   v.literal("forget_me"),
+  v.literal("credits"),
+  v.literal("topup"),
+  v.literal("disconnect_link"),
 );
 
 export const outboundStage = v.union(
@@ -221,6 +224,10 @@ export const outboundStage = v.union(
   v.literal("maps_card"),
   v.literal("artist_drop"),
   v.literal("poll"),
+  v.literal("creative_attachment"),
+  v.literal("creative_caption"),
+  v.literal("billing"),
+  v.literal("draw_card"),
 );
 
 export const locationRequestStatus = v.union(

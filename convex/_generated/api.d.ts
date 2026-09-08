@@ -11,11 +11,13 @@
 import type * as artists from "../artists.js";
 import type * as chatState from "../chatState.js";
 import type * as checkIns from "../checkIns.js";
+import type * as creative from "../creative.js";
 import type * as crons from "../crons.js";
 import type * as dataset from "../dataset.js";
 import type * as http from "../http.js";
 import type * as imports from "../imports.js";
 import type * as inbound from "../inbound.js";
+import type * as lib_creative from "../lib/creative.js";
 import type * as lib_pollMatching from "../lib/pollMatching.js";
 import type * as lib_service_auth from "../lib/service_auth.js";
 import type * as lib_servingEligibility from "../lib/servingEligibility.js";
@@ -40,11 +42,13 @@ declare const fullApi: ApiFromModules<{
   artists: typeof artists;
   chatState: typeof chatState;
   checkIns: typeof checkIns;
+  creative: typeof creative;
   crons: typeof crons;
   dataset: typeof dataset;
   http: typeof http;
   imports: typeof imports;
   inbound: typeof inbound;
+  "lib/creative": typeof lib_creative;
   "lib/pollMatching": typeof lib_pollMatching;
   "lib/service_auth": typeof lib_service_auth;
   "lib/servingEligibility": typeof lib_servingEligibility;

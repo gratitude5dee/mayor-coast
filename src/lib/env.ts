@@ -15,6 +15,18 @@ const serverEnvSchema = z.object({
   IMESSAGE_PROJECT_ID: z.string().min(1),
   IMESSAGE_PROJECT_SECRET: z.string().min(20),
   IMESSAGE_WEBHOOK_SECRET: z.string().min(20),
+  COAST_PUBLIC_URL: z.url().optional(),
+  STRIPE_SECRET_KEY: z.string().min(20).optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().min(20).optional(),
+  BLOB_READ_WRITE_TOKEN: z.string().min(20).optional(),
+  GMI_CLOUD_API_KEY: z.string().min(10).optional(),
+  GMI_REQUEST_QUEUE_URL: z.url().optional(),
+  FAL_KEY: z.string().min(10).optional(),
+  GROQ_API_KEY: z.string().min(10).optional(),
+  GROQ_CREATIVE_MODEL: z.string().min(1).optional(),
+  COAST_CREATIVE_RUNTIME_URL: z.url().optional(),
+  COAST_DRAW_RUNTIME_URL: z.url().optional(),
+  COAST_CREATIVE_CLEANUP_URL: z.url().optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

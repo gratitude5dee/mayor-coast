@@ -9,6 +9,7 @@ import type {
   TurnExecutionResult,
 } from "../photon/contracts";
 import {
+  encryptCreativePayload,
   encryptThreadReference,
   pseudonymizeOpaqueIdentifier,
   pseudonymizeSender,
@@ -61,6 +62,22 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
       ),
       receivedAtMs: input.receivedAtMs,
     };
+    const creativeFields = input.creativeCommand
+      ? {
+          creativeCommand: input.creativeCommand,
+          encryptedCreativePayload: encryptCreativePayload(
+            JSON.stringify({
+              messages: input.messages.map((message) => ({
+                providerMessageId: message.providerMessageId,
+                text: message.text,
+                sentAtMs: message.sentAtMs,
+                attachments: message.attachments ?? [],
+              })),
+            }),
+            this.options.serviceSecret,
+          ),
+        }
+      : {};
 
     let result;
     try {
@@ -75,6 +92,8 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
           })
         : await this.options.client.action(api.service.claimInbound, {
             ...common,
+            ...creativeFields,
+            ...(input.creativeCommandAmbiguous ? { creativeCommandAmbiguous: true } : {}),
             text: input.messages.at(-1)?.text ?? "",
             ...(input.locationSignal ? { locationSignal: true } : {}),
             ...(input.unsupportedContent

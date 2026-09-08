@@ -1,7 +1,9 @@
 import { Modal, Select, SelectOption } from "chat";
+import { get as getPrivateBlob } from "@vercel/blob";
 import { z } from "zod";
 
 import { api } from "../../../../../convex/_generated/api";
+import type { Id } from "../../../../../convex/_generated/dataModel";
 import {
   buildCalendarIcs,
   bookingDetailsFromExperienceFields,
@@ -43,6 +45,10 @@ const requestSchema = z
       "maps_card",
       "artist_drop",
       "poll",
+      "creative_attachment",
+      "creative_caption",
+      "billing",
+      "draw_card",
     ]),
     payload: z.record(z.string(), z.unknown()),
   })
@@ -87,6 +93,13 @@ export async function POST(request: Request): Promise<Response> {
     if (input.stage === "response") {
       const text = z.string().trim().min(1).max(2_000).parse(input.payload.text);
       providerMessageId = (await adapter.postMessage(threadId, text)).id;
+    } else if (input.stage === "draw_card") {
+      const sessionId = z.string().min(1).max(128).parse(input.payload.sessionId);
+      const launchSecret = z.string().min(20).max(256).parse(input.payload.launchSecret);
+      const publicBase = env.COAST_PUBLIC_URL ?? new URL(request.url).origin;
+      const cardUrl = new URL(`/draw/${encodeURIComponent(sessionId)}`, publicBase);
+      cardUrl.hash = `secret=${encodeURIComponent(launchSecret)}`;
+      providerMessageId = (await adapter.sendMiniApp(threadId, cardUrl.toString())).id;
     } else if (input.stage === "results") {
       const markdown = z
         .string()
@@ -189,6 +202,44 @@ export async function POST(request: Request): Promise<Response> {
           `Bay soundcheck: ${artist.displayName} — ${artist.lane}. Bay/NorCal connection: ${artist.regionAnchor}. Tap in: ${artist.instagramUrl}`,
         )
       ).id;
+    } else if (input.stage === "creative_attachment") {
+      const payload = z
+        .object({
+          mediaId: z.string().min(1).max(128),
+          filename: z.string().trim().min(1).max(120),
+          mimeType: z.string().trim().min(1).max(120),
+          caption: z.string().trim().max(480).optional(),
+        })
+        .strict()
+        .parse(input.payload);
+      const mediaRecord = await getConvexHttpClient(env.CONVEX_URL).action(api.service.getCreativeMedia, {
+        serviceSecret: env.convexServiceSecret,
+        mediaId: payload.mediaId as Id<"creativeMedia">,
+        nowMs: Date.now(),
+      });
+      if (mediaRecord === null || !mediaRecord.sourceUrl.startsWith("https://")) throw new Error("CREATIVE_MEDIA_EXPIRED");
+      const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+      if (!blobToken) throw new Error("CREATIVE_BLOB_NOT_CONFIGURED");
+      const media = await getPrivateBlob(mediaRecord.sourceUrl, { access: "private", token: blobToken, useCache: false });
+      if (media === null) throw new Error("CREATIVE_MEDIA_UNAVAILABLE");
+      const bytes = Buffer.from(await new Response(media.stream).arrayBuffer());
+      if (bytes.byteLength > 40 * 1024 * 1024) throw new Error("CREATIVE_MEDIA_TOO_LARGE");
+      providerMessageId = (
+        await adapter.postMessage(threadId, {
+          raw: payload.caption ?? "",
+          files: [{ data: bytes, filename: mediaRecord.filename, mimeType: mediaRecord.mimeType }],
+        })
+      ).id;
+    } else if (input.stage === "creative_caption") {
+      const caption = z.string().trim().min(1).max(480).parse(input.payload.text);
+      providerMessageId = (await adapter.postMessage(threadId, caption)).id;
+    } else if (input.stage === "billing") {
+      const payload = z.object({ text: z.string().trim().min(1).max(2_000), orderId: z.string().regex(/^ct_[a-zA-Z0-9_-]{8,100}$/u).optional() }).strict().parse(input.payload);
+      const checkoutUrl = payload.orderId && process.env.COAST_PUBLIC_URL
+        ? new URL(`/api/stripe/creative-topup?order_id=${encodeURIComponent(payload.orderId)}`, process.env.COAST_PUBLIC_URL).toString()
+        : null;
+      const text = checkoutUrl ? `${payload.text} ${checkoutUrl}` : payload.text;
+      providerMessageId = (await adapter.postMessage(threadId, text)).id;
     } else {
       const poll = pollPayloadSchema.parse(input.payload);
       const modal = Modal({

@@ -15,6 +15,7 @@ import {
 } from "./delivery-context";
 import { TypingLease } from "./typing";
 import { makeDeliveryKey } from "./webhook";
+import { classifyCreativeCommand } from "../coast/commands";
 
 export type CoastInboundHandlerDependencies = {
   adapter: Pick<iMessageAdapter, "addReaction" | "isDM" | "startTyping">;
@@ -45,7 +46,25 @@ export function createCoastInboundHandler(
     if (!webhookId) throw new Error("Missing verified Photon delivery context");
 
     const inboundMessages = [...(context?.skipped ?? []), message];
-    const detectedContent = detectUnsupportedInboundContent(inboundMessages);
+    const creativeTokens = inboundMessages.flatMap((candidate) => {
+        const tokens = [...candidate.text.matchAll(/(?:^|\s)\/(imagine|zap|draw)\b/giu)]
+          .map((match) => match[1]?.toLowerCase())
+          .filter((value): value is "imagine" | "zap" | "draw" => value === "imagine" || value === "zap" || value === "draw");
+        return tokens.length > 0 ? tokens : [classifyCreativeCommand(candidate.text)];
+      }).filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
+    const creativeCommands = [...new Set(
+      inboundMessages.flatMap((candidate) => {
+        const tokens = [...candidate.text.matchAll(/(?:^|\s)\/(imagine|zap|draw)\b/giu)]
+          .map((match) => match[1]?.toLowerCase())
+          .filter((value): value is "imagine" | "zap" | "draw" => value === "imagine" || value === "zap" || value === "draw");
+        return tokens.length > 0 ? tokens : [classifyCreativeCommand(candidate.text)];
+      }).filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null),
+    )];
+    const creativeCommand = creativeCommands[0] ?? null;
+    const detectedContent = detectUnsupportedInboundContent(
+      inboundMessages,
+      creativeCommand !== null,
+    );
     const locationSignal = detectedContent === "private_location";
     const unsupportedContent = locationSignal ? undefined : detectedContent;
     const vote = unsupportedContent || locationSignal ? undefined : parsePollVote(message.raw);
@@ -57,6 +76,7 @@ export function createCoastInboundHandler(
       messages: toMessageParts(
         inboundMessages,
         unsupportedContent !== undefined || locationSignal,
+        creativeCommand !== null,
       ),
       providerMessageId: message.id,
       receivedAtMs: now(),
@@ -74,6 +94,8 @@ export function createCoastInboundHandler(
             },
           }
         : {}),
+      ...(creativeCommand ? { creativeCommand } : {}),
+      ...(creativeTokens.length !== 1 ? { creativeCommandAmbiguous: true as const } : {}),
     });
     registerPhotonCriticalTask(claimTask);
     const claim = await claimTask;
@@ -153,11 +175,27 @@ const OMITTED_INBOUND_TEXT = "[unsupported inbound content omitted]";
 function toMessageParts(
   messages: Message[],
   redactText: boolean,
+  includeAttachments: boolean,
 ): InboundMessagePart[] {
   return messages.map((item) => ({
     providerMessageId: item.id,
     sentAtMs: item.metadata.dateSent.getTime(),
     text: redactText ? OMITTED_INBOUND_TEXT : item.text,
+    ...(includeAttachments && item.attachments.length > 0
+      ? {
+          attachments: item.attachments.map((attachment, index) => ({
+            id:
+              attachment.fetchMetadata?.id ??
+              attachment.fetchMetadata?.mediaId ??
+              attachment.url ??
+              `${item.id}:${index}`,
+            type: attachment.type,
+            ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }),
+            ...(attachment.size === undefined ? {} : { size: attachment.size }),
+            ...(attachment.url === undefined ? {} : { url: attachment.url }),
+          })),
+        }
+      : {}),
   }));
 }
 
@@ -168,11 +206,12 @@ function toMessageParts(
  */
 export function detectUnsupportedInboundContent(
   messages: Array<Pick<Message, "attachments" | "raw">>,
+  creative = false,
 ): UnsupportedInboundContent | undefined {
   for (const message of messages) {
     if (containsPrivateLocation(message.raw)) return "private_location";
   }
-  if (messages.some((message) => (message.attachments?.length ?? 0) > 0)) {
+  if (!creative && messages.some((message) => (message.attachments?.length ?? 0) > 0)) {
     return "attachment";
   }
   return undefined;

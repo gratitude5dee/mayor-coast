@@ -99,10 +99,37 @@ export const recoverStalled = internalMutation({
       }
     }
 
+    let expiredCreative = 0;
+    for (const state of ["awaiting_payment", "admitted", "submitting", "submission_unknown", "queued", "running", "ready_for_delivery", "retryable_failure"] as const) {
+      const jobs = await ctx.db
+        .query("creativeJobs")
+        .withIndex("by_expiry", (q) => q.eq("state", state).lt("expiresAtMs", nowMs))
+        .take(20);
+      for (const job of jobs) {
+        if (job.reservationSource === "credit") {
+          await ctx.db.insert("creativeCreditLedger", {
+            userId: job.userId,
+            jobId: job._id,
+            kind: "release",
+            amountCents: job.reservedCents,
+            idempotencyKey: `${job.reservationId}:expiry-release`,
+            createdAtMs: nowMs,
+          });
+        } else if (job.reservationSource === "free") {
+          const usage = await ctx.db
+            .query("creativeUsage")
+            .withIndex("by_reservation", (q) => q.eq("reservationId", job.reservationId))
+            .unique();
+          if (usage !== null) await ctx.db.delete(usage._id);
+        }
+        await ctx.db.patch(job._id, { state: "expired", updatedAtMs: nowMs });
+        expiredCreative += 1;
+      }
+    }
     await ctx.db.patch(logId, {
       state: "completed",
       processedCount:
-        debouncing.length + generating.length + retryableDeliveries.length + expiredState,
+        debouncing.length + generating.length + retryableDeliveries.length + expiredState + expiredCreative,
       deletedCount: expiredState,
       recoveredCount: recovered,
       finishedAtMs: Date.now(),

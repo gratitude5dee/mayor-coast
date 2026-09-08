@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" rx="32" fill="#0B241E"/>
+  <circle cx="1100" cy="30" r="370" fill="#17372D"/>
+  <text x="78" y="113" fill="#F5F0DF" font-family="Arial, sans-serif" font-size="32" font-weight="700" letter-spacing="8">COAST / DRAW</text>
+  <text x="78" y="257" fill="#F5F0DF" font-family="Georgia, serif" font-size="72">A little sketch.</text>
+  <text x="78" y="341" fill="#F5F0DF" font-family="Georgia, serif" font-size="72">A whole new idea.</text>
+  <rect x="78" y="427" width="271" height="71" rx="36" fill="#F5B642"/>
+  <text x="117" y="473" fill="#0B241E" font-family="Arial, sans-serif" font-size="27" font-weight="700">Open your canvas ↗</text>
+  <g transform="translate(767 154) rotate(7 150 150)">
+    <rect x="-12" y="17" width="309" height="316" rx="18" fill="#000" opacity=".16"/>
+    <rect width="305" height="310" rx="16" fill="#FFFEF7"/>
+    <path d="M30 225C72 179 112 211 148 189S218 179 275 210M33 243C109 228 162 252 273 230" stroke="#0B241E" stroke-width="5" stroke-linecap="round"/>
+    <path d="M63 191C82 161 113 129 163 93M162 93C153 119 147 152 152 186M163 93C202 131 220 162 225 190M75 184L142 178M164 178L212 186" stroke="#0B241E" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="63" cy=" seventy" r="0"/>
+    <circle cx="74" cy="70" r="22" fill="#F5B642"/>
+    <path d="M239 76L244 89L258 95L244 100L240 114L234 99L220 95L234 89L239 76Z" fill="#F5B642"/>
+  </g>
+  <path d="M677 375C689 332 724 310 756 310M741 297L758 310L741 324" stroke="#F5B642" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="80" y="575" fill="#B7C4BB" font-family="Arial, sans-serif" font-size="21">SKETCH · IMAGINE · SENT TO IMESSAGE</text>
+</svg>

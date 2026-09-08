@@ -1,9 +1,17 @@
 import type { StateAdapter } from "chat";
+import type { CreativeCommand } from "../creative";
 
 export type InboundMessagePart = {
   providerMessageId: string;
   sentAtMs: number;
   text: string;
+  attachments?: Array<{
+    id: string;
+    type: "image" | "video" | "audio" | "file";
+    mimeType?: string;
+    size?: number;
+    url?: string;
+  }>;
 };
 
 export type UnsupportedInboundContent = "attachment" | "private_location";
@@ -25,13 +33,16 @@ export type InboundClaimInput = {
     providerPollId?: string;
     selected: true;
   };
+  creativeCommand?: CreativeCommand;
+  creativeCommandAmbiguous?: boolean;
+  encryptedCreativePayload?: string;
 };
 
 export type InboundClaimResult =
   | { status: "blocked" | "duplicate" }
   | {
       claimId: string;
-      command: "forget_me" | "help" | "none" | "start" | "stop";
+      command: "forget_me" | "help" | "none" | "start" | "stop" | "credits" | "topup" | "disconnect_link";
       shouldAcknowledge: boolean;
       shouldStartTyping: boolean;
       status: "claimed";

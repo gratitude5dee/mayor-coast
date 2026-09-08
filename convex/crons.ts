@@ -39,6 +39,13 @@ crons.interval(
 );
 
 crons.interval(
+  "delete expired creative media",
+  { hours: 1 },
+  internal.creative.cleanupExpiredMedia,
+  {},
+);
+
+crons.interval(
   "catch up native Photon poll votes",
   { minutes: 1 },
   maintainPollGatewayReference,

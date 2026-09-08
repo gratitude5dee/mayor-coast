@@ -30,12 +30,16 @@ flowchart LR
 6. Opted-in post-visit check-ins and six-hour inactivity scans run in Convex. Idle nudges require prior taste signals, respect 10 AM–10 PM SF quiet hours, are capped at one per six hours, and skip stopped, stale, or currently active conversations.
 7. A “near me” or directions request sends one native Find My request. A consented, fresh location is used only in the serverless resolver to rank public destinations or make a Maps handoff; exact origin never enters Convex, OpenAI, logs, or outbound URLs.
 
+## Creative generation
+
+COAST accepts `/imagine` for GMI images and one-image edits, `/zap` for 15-second Fal MiniMax H3 videos, and `/draw` for a hosted sketch canvas backed by OpenAI image editing. Each user receives 10 images and 10 videos per rolling 24 hours. After an allowance is exhausted, images cost $0.50 and videos cost $1.00 from purchased credit; a fixed $9.99 Stripe Checkout top-up grants $10.00 credit. Link wallet onboarding is optional and begins only when the user selects Connect Link. Creative prompts and media are isolated from concierge context and expire from COAST storage within 24 hours.
+
 ## Experience guarantees
 
 - Results are source-backed; model output cannot create destination URLs.
 - Native result cards, calendar attachments, polls, location requests, and Maps cards are persisted as idempotent delivery stages before sending.
 - HMAC-pseudonymized users, preferences, threads, and delivery records live in Convex. Raw message text expires after 30 days; `FORGET ME` clears the user’s saved state.
-- The beta is 1:1 DM only, uses Photon’s free shared line, and sends third-party ticket/reservation links rather than processing payments.
+- The beta is 1:1 DM only and uses Photon’s free shared line. Third-party ticket/reservation links remain source-backed; creative top-ups are processed through the fixed Stripe Checkout flow.
 
 ## Local validation
 
@@ -49,6 +53,8 @@ pnpm build
 ```
 
 Copy `.env.example` to `.env.local` only for local development. Real values belong in Convex/Vercel encrypted environment settings and must never be committed or printed.
+
+Creative deployment settings are `COAST_CREATIVE_RUNTIME_URL`, `COAST_DRAW_RUNTIME_URL`, `COAST_CREATIVE_CLEANUP_URL`, `OPENAI_API_KEY`, `GMI_CLOUD_API_KEY`, `GMI_REQUEST_QUEUE_URL`, `FAL_KEY`, `GROQ_API_KEY` (optional prompt compiler), `BLOB_READ_WRITE_TOKEN`, `COAST_PUBLIC_URL`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`. Convex must also hold the matching `COAST_CONVEX_SERVICE_SECRET`; Link CLI runtime files are packaged through the pinned `@stripe/link-cli` dependency.
 
 ## Fixed dataset
 
@@ -75,7 +81,10 @@ pnpm snapshot:import -- --prod --yes
 - `GET /api/health` — redacted configuration readiness.
 - `POST /api/imessage/webhook` — signed Photon delivery endpoint.
 - `POST /api/internal/agent` — service-authenticated Responses runtime.
+- `POST /api/internal/creative` — service-authenticated GMI/Fal creative worker with private Blob materialization.
 - `POST /api/internal/delivery` — service-authenticated Photon delivery bridge.
+- `GET /api/stripe/creative-topup?order_id=...` — fixed $9.99 Checkout redirect for a server-owned order.
+- `POST /api/stripe/webhook` — raw-body verified Stripe settlement endpoint.
 
 The webhook is a Node route. The Photon adapter verifies the exact raw request body and its five-minute signature window. Convex claims every delivery before any acknowledgment or generation work.
 
@@ -87,7 +96,7 @@ Do not reach through Spectrum's private `__internal` platform registry to work a
 
 ## Deployment boundaries
 
-The beta uses a free Photon shared line. Do not upgrade or provision a dedicated public number without separate authorization. COAST returns existing third-party reservation/ticket URLs and does not process payments.
+The beta uses a free Photon shared line. Do not upgrade or provision a dedicated public number without separate authorization. COAST returns existing third-party reservation/ticket URLs and processes fixed-price creative top-ups through Stripe Checkout, with optional Link wallet approval after a user chooses it.
 
 ## Current cloud state
 

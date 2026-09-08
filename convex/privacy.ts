@@ -125,6 +125,35 @@ export const eraseUserBatch = internalMutation({
       }
     }
 
+    const creativeJobs = await ctx.db
+      .query("creativeJobs")
+      .withIndex("by_user_state", (q) => q.eq("userId", args.userId))
+      .take(BATCH_SIZE);
+    for (const job of creativeJobs) {
+      if (!["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state)) {
+        await ctx.db.patch(job._id, { state: "cancelled", encryptedPayload: "[redacted]", updatedAtMs: nowMs });
+      } else if (job.encryptedPayload !== "[redacted]") {
+        await ctx.db.patch(job._id, { encryptedPayload: "[redacted]", updatedAtMs: nowMs });
+      }
+      const media = await ctx.db
+        .query("creativeMedia")
+        .withIndex("by_job", (q) => q.eq("jobId", job._id))
+        .take(BATCH_SIZE);
+      for (const item of media) {
+        await ctx.db.delete(item._id);
+        processed += 1;
+      }
+      processed += 1;
+    }
+    const links = await ctx.db
+      .query("creativeLinkConnections")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .take(BATCH_SIZE);
+    for (const link of links) {
+      await ctx.db.patch(link._id, { status: "revoked", encryptedAuth: "[revoked]", updatedAtMs: nowMs });
+      processed += 1;
+    }
+
     const incomplete =
       preferences.length === BATCH_SIZE ||
       artistShares.length === BATCH_SIZE ||
@@ -134,7 +163,9 @@ export const eraseUserBatch = internalMutation({
       itineraries.length === BATCH_SIZE ||
       remainingCheckIn !== null ||
       decisions.length === BATCH_SIZE ||
-      turns.length === BATCH_SIZE;
+      turns.length === BATCH_SIZE ||
+      creativeJobs.length === BATCH_SIZE ||
+      links.length === BATCH_SIZE;
     if (incomplete) {
       await ctx.scheduler.runAfter(0, internal.privacy.eraseUserBatch, {
         userId: args.userId,

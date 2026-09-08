@@ -293,7 +293,11 @@ function stageRank(
     | "location_request"
     | "maps_card"
     | "artist_drop"
-    | "poll",
+    | "poll"
+    | "creative_attachment"
+    | "creative_caption"
+    | "billing"
+    | "draw_card",
 ): number {
   if (stage === "response") return 0;
   if (stage === "results" || stage === "experience_card") return 1;
@@ -301,6 +305,10 @@ function stageRank(
   if (stage === "reservation_action") return 3;
   if (stage === "location_request" || stage === "maps_card") return 4;
   if (stage === "artist_drop") return 4;
+  if (stage === "creative_attachment") return 5;
+  if (stage === "creative_caption") return 6;
+  if (stage === "billing") return 5;
+  if (stage === "draw_card") return 1;
   return 4;
 }
 
@@ -447,6 +455,12 @@ export const getGenerationContext = internalQuery({
       .withIndex("by_thread_created", (q) => q.eq("threadId", turn.threadId))
       .order("desc")
       .take(MAX_CONTEXT_MESSAGES);
+    const messageTurnIds = [...new Set(messages.flatMap((message) => message.turnId === undefined ? [] : [message.turnId]))];
+    const creativeTurnIds = new Set(
+      (await Promise.all(messageTurnIds.map((turnId) => ctx.db.get(turnId))))
+        .filter((candidate) => candidate?.creativeCommand !== undefined)
+        .map((candidate) => candidate!._id),
+    );
     const preferences = await ctx.db
       .query("coastPreferences")
       .withIndex("by_user", (q) => q.eq("userId", turn.userId))
@@ -461,7 +475,7 @@ export const getGenerationContext = internalQuery({
     const priorSelections: Array<{
       items: Array<{ externalId: string; title: string }>;
     }> = [];
-    for (const priorTurn of priorTurns.reverse()) {
+    for (const priorTurn of priorTurns.filter((candidate) => candidate.creativeCommand === undefined).reverse()) {
       const externalIds = [
         ...(priorTurn.plan?.selectedExternalIds ?? []),
         ...(priorTurn.plan?.dailyAgendaExternalIds ?? []),
@@ -484,7 +498,7 @@ export const getGenerationContext = internalQuery({
       threadId: thread._id,
       encryptedThreadRef: thread.encryptedProviderThreadRef,
       messages: messages
-        .filter((message) => message.body !== null)
+        .filter((message) => message.body !== null && (message.turnId === undefined || !creativeTurnIds.has(message.turnId)))
         .reverse()
         .map((message) => ({
           direction: message.direction,
@@ -728,7 +742,10 @@ export const persistPlan = internalMutation({
         | "calendar_attachment"
         | "reservation_action"
         | "artist_drop"
-        | "poll";
+        | "poll"
+        | "creative_attachment"
+        | "creative_caption"
+        | "billing";
       itemKey: string;
       payload: Record<string, unknown>;
       sequence: number;
@@ -960,6 +977,10 @@ export const claimNextDelivery = internalMutation({
         v.literal("maps_card"),
         v.literal("artist_drop"),
         v.literal("poll"),
+        v.literal("creative_attachment"),
+        v.literal("creative_caption"),
+        v.literal("billing"),
+        v.literal("draw_card"),
       ),
       payload: v.record(v.string(), v.any()),
       encryptedThreadRef: v.string(),
@@ -996,6 +1017,23 @@ export const claimNextDelivery = internalMutation({
     );
     if (nextIndex < 0) {
       if (ordered.length > 0 && ordered.every((delivery) => delivery.status === "sent")) {
+        const creativeJobs = await ctx.db
+          .query("creativeJobs")
+          .withIndex("by_user_state", (q) => q.eq("userId", turn.userId))
+          .take(20);
+        const creativeStillRunning = creativeJobs.some(
+          (job) =>
+            job.turnId === turn._id &&
+            ![
+              "delivered",
+              "failed",
+              "refused",
+              "cancelled",
+              "expired",
+              "retryable_failure",
+            ].includes(job.state),
+        );
+        if (creativeStillRunning) return null;
         await ctx.db.patch(turn._id, {
           state: "sent",
           completedAtMs: args.nowMs,
@@ -1183,6 +1221,20 @@ export const recordDeliverySuccess = internalMutation({
         }
       }
     }
+    if (delivery.stage === "creative_attachment") {
+      const creativeJob = await ctx.db
+        .query("creativeJobs")
+        .withIndex("by_delivery", (q) => q.eq("deliveryId", delivery._id))
+        .unique();
+      if (creativeJob !== null) {
+        await ctx.db.patch(creativeJob._id, { state: "delivered", updatedAtMs: args.nowMs });
+        const usage = await ctx.db
+          .query("creativeUsage")
+          .withIndex("by_reservation", (q) => q.eq("reservationId", creativeJob.reservationId))
+          .unique();
+        if (usage !== null) await ctx.db.patch(usage._id, { settled: true });
+      }
+    }
     const body =
       typeof delivery.payload.text === "string"
         ? delivery.payload.text
@@ -1242,6 +1294,31 @@ export const recordDeliveryFailure = internalMutation({
       createdAtMs: args.nowMs,
     });
     if (terminal) {
+      if (delivery.stage === "creative_attachment") {
+        const creativeJob = await ctx.db
+          .query("creativeJobs")
+          .withIndex("by_delivery", (q) => q.eq("deliveryId", delivery._id))
+          .unique();
+        if (creativeJob !== null) {
+          if (creativeJob.reservationSource === "credit") {
+            await ctx.db.insert("creativeCreditLedger", {
+              userId: creativeJob.userId,
+              jobId: creativeJob._id,
+              kind: "release",
+              amountCents: creativeJob.reservedCents,
+              idempotencyKey: `${creativeJob.reservationId}:delivery-release`,
+              createdAtMs: args.nowMs,
+            });
+          } else if (creativeJob.reservationSource === "free") {
+            const usage = await ctx.db
+              .query("creativeUsage")
+              .withIndex("by_reservation", (q) => q.eq("reservationId", creativeJob.reservationId))
+              .unique();
+            if (usage !== null) await ctx.db.delete(usage._id);
+          }
+          await ctx.db.patch(creativeJob._id, { state: "failed", updatedAtMs: args.nowMs });
+        }
+      }
       await ctx.db.patch(turn._id, {
         state: "failed",
         lastErrorCode: args.errorCode,

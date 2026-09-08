@@ -5,7 +5,7 @@ import { constantTimeStringEqual } from "./identity";
 // Convex retains the raw credential. Vercel verifies only this SHA-256
 // fingerprint, so its runtime configuration never contains that credential.
 const CONVEX_TO_VERCEL_SECRET_FINGERPRINT =
-  "4bfec08f77aebacd12a3ebfce6db23ecd5538ac7524ba9ef67a0e7c537410189";
+  "67926cbb9c33e001d7a8846d90c20bc29693b38cd97d20793b35e2c5f80b6039";
 
 export function authorizeInternalRequest(
   request: Request,

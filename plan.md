@@ -13,7 +13,7 @@ This is the implementation handoff for the existing 1:1 Photon iMessage experien
 
 ## Routing and privacy
 
-Recognize exactly one `/imagine` or `/zap` command in a debounced burst. Preserve STOP, START, and FORGET ME precedence, reject mixed creative commands, deduplicate attachment source identifiers, and leave noncreative attachments on the existing rejection path. Route creative turns before concierge/calendar/poll/artist/recommendation logic. Creative payloads are AES-GCM encrypted before Convex admission, while ordinary message records contain only a redacted placeholder and creative turns are excluded from concierge history and preference learning.
+Recognize exactly one `/imagine`, `/zap`, or `/draw` command in a debounced burst. Preserve STOP, START, and FORGET ME precedence, reject mixed creative commands, deduplicate attachment source identifiers, and leave noncreative attachments on the existing rejection path. Route creative turns before concierge/calendar/poll/artist/recommendation logic. Creative payloads are AES-GCM encrypted before Convex admission, while ordinary message records contain only a redacted placeholder and creative turns are excluded from concierge history and preference learning.
 
 Support deterministic `/credits`, `/topup`, and `/disconnect-link` responses. `/credits` reports both free windows and purchased balance; `/topup` does not promote payment while free generations remain; disconnect revokes stored Link auth without deleting purchased balance.
 
@@ -43,7 +43,7 @@ Implementation order: contracts and routing → ledger/jobs → providers/media 
 
 ## Next: `/draw` iMessage canvas and progressive image preview
 
-`/draw` should open a short-lived COAST mini-app card in the existing 1:1 iMessage thread. It is a drawing-first entry point for the existing image-generation product, not a separate balance or provider: submitting a canvas consumes one image allowance or 50 cents using the same free-before-paid admission transaction as `/imagine`.
+`/draw` opens a short-lived COAST mini-app card in the existing 1:1 iMessage thread. Photon’s URL card hosts the web canvas inside Messages without extension identifiers. The repository also contains a native PencilKit `MSMessagesAppViewController` target for a live transcript canvas; production activation requires signing, installation, and matching Vercel team/bundle settings. It is a drawing-first entry point for the existing image-generation product, not a separate balance or provider: submitting a canvas consumes one image allowance or 50 cents using the same free-before-paid admission transaction as `/imagine`.
 
 ### Interaction contract
 
@@ -68,5 +68,5 @@ Add `drawSessions` and `creativePreviewMedia` tables keyed by opaque IDs, with e
 - Add a `/draw` router branch before concierge processing, with the same STOP/START/FORGET precedence and creative-command ambiguity checks.
 - Build the card as an accessible mobile canvas with pointer/touch handling, keyboard controls, reduced-motion progress, and a non-canvas prompt fallback.
 - Add durable tests for session/user/thread binding, double submit, expired session, blank canvas, free and paid admission, partial-event ordering/reconnect, private-preview authorization, cancellation, and 24-hour cleanup.
-- Test on native iMessage before enabling the feature flag. Verify the card opens from a direct iMessage URL, the card receives at most two partials, and final image delivery survives card closure, network loss, and an iMessage send retry.
+- Test the Photon URL mini-app and the signed `ios/CoastDraw` extension on native iMessage before enabling the live layout. Verify the card opens from a direct iMessage URL, the card receives at most two partials, and final image delivery survives card closure, network loss, and an iMessage send retry.
 - Keep `/draw` behind an independent `COAST_DRAW_ENABLED` flag. The feature remains disabled until the deployed environment has image streaming credentials, private Blob access, and a verified mini-app delivery capability.

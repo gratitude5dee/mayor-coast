@@ -32,7 +32,7 @@ flowchart LR
 
 ## Creative generation
 
-COAST accepts `/imagine` for GMI images and one-image edits, `/zap` for 15-second Fal MiniMax H3 videos, and `/draw` for a hosted sketch canvas backed by OpenAI image editing. Each user receives 10 images and 10 videos per rolling 24 hours. After an allowance is exhausted, images cost $0.50 and videos cost $1.00 from purchased credit; a fixed $9.99 Stripe Checkout top-up grants $10.00 credit. Link wallet onboarding is optional and begins only when the user selects Connect Link. Creative prompts and media are isolated from concierge context and expire from COAST storage within 24 hours.
+COAST accepts `/imagine` for GMI images and one-image edits, `/zap` for 15-second Fal MiniMax H3 videos, and `/draw` for an iMessage sketch canvas backed by OpenAI image editing. Photon’s URL mini-app keeps the hosted canvas in Messages today. The native PencilKit Messages extension in `ios/CoastDraw` enables a live transcript canvas after it is signed and installed. Each user receives 10 images and 10 videos per rolling 24 hours. After an allowance is exhausted, images cost $0.50 and videos cost $1.00 from purchased credit; a fixed $9.99 Stripe Checkout top-up grants $10.00 credit. Link wallet onboarding is optional and begins only when the user selects Connect Link. Creative prompts and media are isolated from concierge context and expire from COAST storage within 24 hours.
 
 ## Experience guarantees
 
@@ -54,7 +54,7 @@ pnpm build
 
 Copy `.env.example` to `.env.local` only for local development. Real values belong in Convex/Vercel encrypted environment settings and must never be committed or printed.
 
-Creative deployment settings are `COAST_CREATIVE_RUNTIME_URL`, `COAST_DRAW_RUNTIME_URL`, `COAST_CREATIVE_CLEANUP_URL`, `OPENAI_API_KEY`, `GMI_CLOUD_API_KEY`, `GMI_REQUEST_QUEUE_URL`, `FAL_KEY`, `GROQ_API_KEY` (optional prompt compiler), `BLOB_READ_WRITE_TOKEN`, `COAST_PUBLIC_URL`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`. Convex must also hold the matching `COAST_CONVEX_SERVICE_SECRET`; Link CLI runtime files are packaged through the pinned `@stripe/link-cli` dependency.
+Creative deployment settings are `COAST_CREATIVE_RUNTIME_URL`, `COAST_DRAW_RUNTIME_URL`, `COAST_CREATIVE_CLEANUP_URL`, `OPENAI_API_KEY`, `GMI_CLOUD_API_KEY`, `GMI_REQUEST_QUEUE_URL`, `FAL_KEY`, `GROQ_API_KEY` (optional prompt compiler), `BLOB_READ_WRITE_TOKEN`, `COAST_PUBLIC_URL`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`. A live transcript card additionally uses `COAST_DRAW_APPLE_TEAM_ID`, `COAST_DRAW_EXTENSION_BUNDLE_ID`, and the optional `COAST_DRAW_APP_STORE_ID`; the values must match the signed target under `ios/CoastDraw`. Convex must also hold the matching `COAST_CONVEX_SERVICE_SECRET`; Link CLI runtime files are packaged through the pinned `@stripe/link-cli` dependency.
 
 ## Fixed dataset
 

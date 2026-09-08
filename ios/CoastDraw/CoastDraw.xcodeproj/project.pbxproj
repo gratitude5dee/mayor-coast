@@ -1,0 +1,423 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		14100F645E766735F2639473 /* CoastDrawMessages.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 09AC59F6AE437B1C74225DCB /* CoastDrawMessages.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		3BD6588889FEA3C0E64266E7 /* CoastDrawApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63763DC2F964C107AC831A15 /* CoastDrawApp.swift */; };
+		54C5C2A5162A4FCF87A46238 /* PencilCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1E32197245A59B0169DDAFF /* PencilCanvas.swift */; };
+		A542B83E77AACB3924D0E37E /* MessagesViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45772EFEEBAC4CFC3F2CF397 /* MessagesViewController.swift */; };
+		BE4F0DA0EC67D2137AEC96D0 /* DrawSessionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8CA89A56D9E231AF12FF09F /* DrawSessionModel.swift */; };
+		DF651D5DF8F07298AAFE52A9 /* DrawView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0FDCAF0164F13B0259908D5 /* DrawView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		1ADEABC5487613027CAF52E5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9E7AFF1DF8C5B50E0D5828E8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2FB708982536B39C11BDB111;
+			remoteInfo = CoastDrawMessages;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A14FDB3E57BE34E84C81346D /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				14100F645E766735F2639473 /* CoastDrawMessages.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		09AC59F6AE437B1C74225DCB /* CoastDrawMessages.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = CoastDrawMessages.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		45772EFEEBAC4CFC3F2CF397 /* MessagesViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesViewController.swift; sourceTree = "<group>"; };
+		63763DC2F964C107AC831A15 /* CoastDrawApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoastDrawApp.swift; sourceTree = "<group>"; };
+		73224B5936E3FA482D222D71 /* CoastDraw.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CoastDraw.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AF57985571895EB0B80CDDFD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		B8CA89A56D9E231AF12FF09F /* DrawSessionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawSessionModel.swift; sourceTree = "<group>"; };
+		E0FDCAF0164F13B0259908D5 /* DrawView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawView.swift; sourceTree = "<group>"; };
+		E1E32197245A59B0169DDAFF /* PencilCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilCanvas.swift; sourceTree = "<group>"; };
+		F86ACA7180BC12A312BF22D1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		5097DC482265AC48E3753659 /* CoastDrawApp */ = {
+			isa = PBXGroup;
+			children = (
+				63763DC2F964C107AC831A15 /* CoastDrawApp.swift */,
+				F86ACA7180BC12A312BF22D1 /* Info.plist */,
+			);
+			path = CoastDrawApp;
+			sourceTree = "<group>";
+		};
+		5C9829EEDF9D109BF6D5B01F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				73224B5936E3FA482D222D71 /* CoastDraw.app */,
+				09AC59F6AE437B1C74225DCB /* CoastDrawMessages.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		954A22A9C2D9203BF220A255 = {
+			isa = PBXGroup;
+			children = (
+				5097DC482265AC48E3753659 /* CoastDrawApp */,
+				FF46F9BC4C05A545BA910B53 /* MessagesExtension */,
+				5C9829EEDF9D109BF6D5B01F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FF46F9BC4C05A545BA910B53 /* MessagesExtension */ = {
+			isa = PBXGroup;
+			children = (
+				B8CA89A56D9E231AF12FF09F /* DrawSessionModel.swift */,
+				E0FDCAF0164F13B0259908D5 /* DrawView.swift */,
+				AF57985571895EB0B80CDDFD /* Info.plist */,
+				45772EFEEBAC4CFC3F2CF397 /* MessagesViewController.swift */,
+				E1E32197245A59B0169DDAFF /* PencilCanvas.swift */,
+			);
+			path = MessagesExtension;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2FB708982536B39C11BDB111 /* CoastDrawMessages */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4FC13CC3DDBC766C91FD27C7 /* Build configuration list for PBXNativeTarget "CoastDrawMessages" */;
+			buildPhases = (
+				55EDB1FE5BDF3599CE92ED26 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CoastDrawMessages;
+			packageProductDependencies = (
+			);
+			productName = CoastDrawMessages;
+			productReference = 09AC59F6AE437B1C74225DCB /* CoastDrawMessages.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		31DF25BF31EBF917A9C929D9 /* CoastDraw */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6A1A2F2100485317992ACEBE /* Build configuration list for PBXNativeTarget "CoastDraw" */;
+			buildPhases = (
+				5B71AEBFDF08DC53601C80E6 /* Sources */,
+				A14FDB3E57BE34E84C81346D /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				57C8754A15E4A28E5581AAA6 /* PBXTargetDependency */,
+			);
+			name = CoastDraw;
+			packageProductDependencies = (
+			);
+			productName = CoastDraw;
+			productReference = 73224B5936E3FA482D222D71 /* CoastDraw.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9E7AFF1DF8C5B50E0D5828E8 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					2FB708982536B39C11BDB111 = {
+						ProvisioningStyle = Automatic;
+					};
+					31DF25BF31EBF917A9C929D9 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 86653D4D4D92AEC628C073E1 /* Build configuration list for PBXProject "CoastDraw" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 954A22A9C2D9203BF220A255;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 5C9829EEDF9D109BF6D5B01F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				31DF25BF31EBF917A9C929D9 /* CoastDraw */,
+				2FB708982536B39C11BDB111 /* CoastDrawMessages */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		55EDB1FE5BDF3599CE92ED26 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BE4F0DA0EC67D2137AEC96D0 /* DrawSessionModel.swift in Sources */,
+				DF651D5DF8F07298AAFE52A9 /* DrawView.swift in Sources */,
+				A542B83E77AACB3924D0E37E /* MessagesViewController.swift in Sources */,
+				54C5C2A5162A4FCF87A46238 /* PencilCanvas.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5B71AEBFDF08DC53601C80E6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3BD6588889FEA3C0E64266E7 /* CoastDrawApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		57C8754A15E4A28E5581AAA6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2FB708982536B39C11BDB111 /* CoastDrawMessages */;
+			targetProxy = 1ADEABC5487613027CAF52E5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		3C2FA6750E9440317BC24660 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = MessagesExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.fivedeestudios.coastdraw.MessagesExtension;
+				PRODUCT_NAME = "COAST Draw";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		3DC9C1D908AAFE8F05F6B03F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		536AD988A2EE6B8E8751BDBB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = CoastDrawApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.fivedeestudios.coastdraw;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		94A3B6D4D28090D760E850F1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		DBFFAA734E152DBC53CFAA36 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = MessagesExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.fivedeestudios.coastdraw.MessagesExtension;
+				PRODUCT_NAME = "COAST Draw";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F3374D4144A9B4A617B8695C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = CoastDrawApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.fivedeestudios.coastdraw;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4FC13CC3DDBC766C91FD27C7 /* Build configuration list for PBXNativeTarget "CoastDrawMessages" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3C2FA6750E9440317BC24660 /* Debug */,
+				DBFFAA734E152DBC53CFAA36 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6A1A2F2100485317992ACEBE /* Build configuration list for PBXNativeTarget "CoastDraw" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F3374D4144A9B4A617B8695C /* Debug */,
+				536AD988A2EE6B8E8751BDBB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		86653D4D4D92AEC628C073E1 /* Build configuration list for PBXProject "CoastDraw" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3DC9C1D908AAFE8F05F6B03F /* Debug */,
+				94A3B6D4D28090D760E850F1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9E7AFF1DF8C5B50E0D5828E8 /* Project object */;
+}

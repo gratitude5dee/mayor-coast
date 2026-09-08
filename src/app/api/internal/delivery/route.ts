@@ -105,6 +105,7 @@ export async function POST(request: Request): Promise<Response> {
           teamId: env.COAST_DRAW_APPLE_TEAM_ID,
           extensionBundleId: env.COAST_DRAW_EXTENSION_BUNDLE_ID,
           ...(env.COAST_DRAW_APP_STORE_ID ? { appStoreId: env.COAST_DRAW_APP_STORE_ID } : {}),
+          live: true,
           url: cardUrl,
           layout: {
             caption: "COAST Draw",

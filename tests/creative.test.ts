@@ -14,6 +14,7 @@ import {
 import { creativeRuntimeRequestSchema } from "../src/app/api/internal/creative/route";
 import { completedStroke } from "../src/lib/draw/canvas";
 import { drawLaunchSecret, drawSessionCookie } from "../src/lib/draw/launch";
+import { resolveMiniApp } from "@photon-ai/chat-adapter-imessage";
 
 describe("creative commands and credits", () => {
   it("parses text and one image edit without leaking attachment fields", () => {
@@ -86,6 +87,16 @@ describe("creative commands and credits", () => {
       erase: false,
     });
     expect(completedStroke([{ x: Number.NaN, y: 4 }], "#17231d", 18, false)).toBeNull();
+  });
+
+  it("preserves the live Messages layout for the installed draw extension", async () => {
+    await expect(resolveMiniApp({
+      appName: "COAST Draw",
+      teamId: "TEAM123",
+      extensionBundleId: "com.fivedeestudios.coastdraw.MessagesExtension",
+      live: true,
+      url: "https://mayor-blue.vercel.app/draw/session#secret=redacted",
+    })).resolves.toMatchObject({ live: true });
   });
 
   it("gives the user a direct top-up explanation", () => {

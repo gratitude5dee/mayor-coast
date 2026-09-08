@@ -163,6 +163,21 @@ export const createDrawMedia: any = action({
   },
 });
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const getAuthorizedDrawMedia: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), mediaId: v.id("creativeMedia"), nowMs: v.number() },
+  returns: v.union(v.object({ sourceUrl: v.string(), mimeType: v.string(), filename: v.string(), expiresAtMs: v.number() }), v.null()),
+  handler: async (ctx, args) => {
+    assertServiceSecret(args.serviceSecret);
+    const session = await ctx.runQuery(internal.creative.getDrawSession, { sessionId: args.sessionId, browserTokenHash: args.browserTokenHash, nowMs: args.nowMs });
+    if (!session) return null;
+    const media = await ctx.runQuery(internal.creative.getMedia, { mediaId: args.mediaId, nowMs: args.nowMs });
+    if (!media) return null;
+    const manifest = await ctx.runQuery(internal.creative.getDrawMediaIdentity, { mediaId: args.mediaId });
+    return manifest?.drawSessionId === args.sessionId ? media : null;
+  },
+});
+
 export const getCreativeTopup = action({
   args: { serviceSecret: v.string(), orderId: v.string() },
   returns: v.union(

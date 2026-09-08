@@ -159,12 +159,21 @@ export const getMedia = internalQuery({
   },
 });
 
+export const getDrawMediaIdentity = internalQuery({
+  args: { mediaId: v.id("creativeMedia") },
+  returns: v.union(v.object({ drawSessionId: v.union(v.id("drawSessions"), v.null()) }), v.null()),
+  handler: async (ctx, args) => {
+    const media = await ctx.db.get(args.mediaId);
+    return media ? { drawSessionId: media.drawSessionId ?? null } : null;
+  },
+});
+
 export const exchangeDrawSession = internalMutation({
   args: { sessionId: v.id("drawSessions"), launchSecret: v.string(), nowMs: v.number() },
   returns: v.union(v.object({ browserToken: v.string(), expiresAtMs: v.number() }), v.null()),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
-    if (!session || session.status !== "active" || session.launchExpiresAtMs < args.nowMs || session.expiresAtMs < args.nowMs) return null;
+    if (!session || session.status !== "active" || session.launchConsumedAtMs !== undefined || session.launchExpiresAtMs < args.nowMs || session.expiresAtMs < args.nowMs) return null;
     if (serviceSecretFingerprintHex(args.launchSecret) !== session.launchSecretHash) return null;
     const browserToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
     await ctx.db.patch(session._id, { launchConsumedAtMs: args.nowMs, browserTokenHash: serviceSecretFingerprintHex(browserToken), updatedAtMs: args.nowMs });
@@ -211,7 +220,7 @@ export const listDrawEvents = internalQuery({
   returns: v.union(v.object({ events: v.array(v.object({ sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()) })), latest: v.union(v.number(), v.null()) }), v.null()),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
-    if (!session || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) return null;
+    if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) return null;
     const events = await ctx.db.query("drawEvents").withIndex("by_session_created", q => q.eq("sessionId", args.sessionId)).collect();
     const filtered = events.filter(item => item.sequence > (args.afterSequence ?? -1)).sort((a,b) => a.sequence-b.sequence).slice(0, 50);
     return { events: filtered.map(item => ({ sequence: item.sequence, kind: item.kind, state: item.state, mediaId: item.mediaId ?? null, previewIndex: item.previewIndex ?? null })), latest: events.length ? Math.max(...events.map(item => item.sequence)) : null };
@@ -374,7 +383,7 @@ export const completeProcessing = internalMutation({
       createdAtMs: args.nowMs,
       updatedAtMs: args.nowMs,
     });
-    await ctx.db.patch(job._id, { state: "ready_for_delivery", deliveryId: delivery, updatedAtMs: args.nowMs });
+    await ctx.db.patch(job._id, { state: "ready_for_delivery", deliveryId: delivery, outputMediaId: mediaId, updatedAtMs: args.nowMs });
     if (job.drawSessionId) {
       const prior = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
       await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence: (prior.length ? Math.max(...prior.map(item => item.sequence)) : 0) + 1, kind: "completed", state: "ready_for_delivery", mediaId, createdAtMs: args.nowMs });

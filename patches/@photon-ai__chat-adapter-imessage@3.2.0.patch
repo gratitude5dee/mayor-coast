@@ -1,0 +1,25 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 412c60b34fdbab0cdecb0866aa30b9925b688176..27fb306bdc35a633c795c76dcfb07e1881d67b71 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -209,6 +209,8 @@ interface MiniAppCard {
+     appStoreId?: number;
+     /** Bundle id of the `MSMessageExtension` that receives the tap. */
+     extensionBundleId: string;
++    /** Render the installed Messages extension directly in the transcript. */
++    live?: boolean;
+     /** What the recipient sees in the bubble. */
+     layout?: MiniAppCardLayout;
+     /** Apple Developer team id that signs the extension. */
+diff --git a/dist/index.js b/dist/index.js
+index a545c0282df7eef562b3a49c55b510afd005ea5f..90d853de8c9dc471cc939253ec17ed6796b8a0f2 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -799,6 +799,7 @@ async function resolveMiniApp(card) {
+       card.extensionBundleId,
+       "extensionBundleId"
+     ),
++    ...card.live === void 0 ? {} : { live: card.live },
+     url,
+     ...card.appStoreId === void 0 ? {} : { appStoreId: card.appStoreId },
+     layout: {

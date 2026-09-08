@@ -11,6 +11,7 @@ import {
 } from "./_generated/server";
 import { isServingExperienceEligible } from "./lib/servingEligibility";
 import { turnPlan } from "./lib/validators";
+import { settleCreativeFunding } from "./lib/creative";
 
 const MAX_MODEL_STEPS = 2;
 const MAX_TOOL_CALLS = 4;
@@ -1228,11 +1229,22 @@ export const recordDeliverySuccess = internalMutation({
         .unique();
       if (creativeJob !== null) {
         await ctx.db.patch(creativeJob._id, { state: "delivered", updatedAtMs: args.nowMs });
-        const usage = await ctx.db
-          .query("creativeUsage")
-          .withIndex("by_reservation", (q) => q.eq("reservationId", creativeJob.reservationId))
-          .unique();
-        if (usage !== null) await ctx.db.patch(usage._id, { settled: true });
+        await settleCreativeFunding(ctx, creativeJob, args.nowMs);
+        if (creativeJob.drawSessionId) {
+          const prior = await ctx.db
+            .query("drawEvents")
+            .withIndex("by_job_sequence", (q) => q.eq("jobId", creativeJob._id))
+            .collect();
+          await ctx.db.insert("drawEvents", {
+            sessionId: creativeJob.drawSessionId,
+            jobId: creativeJob._id,
+            sequence: (prior.length ? Math.max(...prior.map((item) => item.sequence)) : 0) + 1,
+            kind: "state",
+            state: "delivered",
+            ...(creativeJob.outputMediaId ? { mediaId: creativeJob.outputMediaId } : {}),
+            createdAtMs: args.nowMs,
+          });
+        }
       }
     }
     const body =

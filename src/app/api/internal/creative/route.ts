@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { put } from "@vercel/blob";
+import { ApiError, createFalClient } from "@fal-ai/client";
 
 import {
   buildProviderRequest,
@@ -12,19 +13,28 @@ import { authorizeInternalRequest, privateJson } from "@/lib/security/internal-a
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 25;
+export const maxDuration = 120;
 
-const requestSchema = z.object({
+export const creativeRuntimeRequestSchema = z.object({
+  operation: z.enum(["submit", "poll"]).default("submit"),
+  jobId: z.string().min(1).max(128),
+  attemptId: z.string().min(1).max(256),
+  fencingToken: z.number().int().positive(),
   command: z.enum(["imagine", "zap"]),
   encryptedPayload: z.string().min(24).max(90_000),
-}).strict();
+  providerRequestId: z.string().min(1).max(512).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.operation === "poll" && !value.providerRequestId) {
+    context.addIssue({ code: "custom", path: ["providerRequestId"], message: "providerRequestId is required when polling" });
+  }
+});
 
 export async function POST(request: Request): Promise<Response> {
   if (!authorizeInternalRequest(request)) return privateJson({ error: "unauthorized" }, { status: 401 });
   const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
   if (!secret) return privateJson({ error: "creative_not_configured" }, { status: 503 });
-  let input: z.infer<typeof requestSchema>;
-  try { input = requestSchema.parse(await request.json()); } catch { return privateJson({ error: "invalid_request" }, { status: 400 }); }
+  let input: z.infer<typeof creativeRuntimeRequestSchema>;
+  try { input = creativeRuntimeRequestSchema.parse(await request.json()); } catch { return privateJson({ error: "invalid_request" }, { status: 400 }); }
   try {
     const decrypted = decryptCreativePayload(input.encryptedPayload, secret);
     const envelope = JSON.parse(decrypted) as {
@@ -79,12 +89,25 @@ export async function POST(request: Request): Promise<Response> {
     const parsed = parseCreativeRequest(text, attachments);
     if ("error" in parsed || parsed.command !== input.command) return privateJson({ error: "invalid_creative_payload" }, { status: 422 });
     const provider = buildProviderRequest({ ...parsed, prompt: await compileCreativePrompt(parsed.prompt, parsed.command) });
-    const result = provider.provider === "fal"
-      ? await submitFal(provider.model, provider.input)
-      : await submitGmi(provider.model, provider.input);
-    return privateJson(await materializePrivateMedia(result, parsed.command));
+    if (provider.provider === "fal") {
+      const providerResult = input.operation === "poll"
+        ? await pollFal(provider.model, input.providerRequestId!)
+        : await submitFal(provider.model, provider.input);
+      if (providerResult.status !== "completed") return privateJson(providerResult);
+      return privateJson({ status: "completed", ...(await materializePrivateMedia(providerResult.media, parsed.command)) });
+    }
+    if (input.operation === "poll") return privateJson({ error: "provider_poll_not_supported" }, { status: 422 });
+    return privateJson({ status: "completed", ...(await materializePrivateMedia(await submitGmi(provider.model, provider.input), parsed.command)) });
   } catch (error) {
-    return privateJson({ error: error instanceof Error ? error.message.slice(0, 120) : "creative_provider_failed" }, { status: 502 });
+    const errorStatus = error instanceof ApiError
+      ? error.status
+      : typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : null;
+    const rawCode = errorStatus !== null
+      ? `FAL_HTTP_${errorStatus}`
+      : error instanceof Error ? error.message.slice(0, 120) : "creative_provider_failed";
+    const code = /^[A-Z0-9_]{3,120}$/u.test(rawCode) ? rawCode : "CREATIVE_PROVIDER_RESPONSE_INVALID";
+    const definite = /^(?:FAL|GMI)_HTTP_4\d\d$|^PROVIDER_RENDER_FAILED$|^FAL_RESULT_MISSING_URL$/u.test(code);
+    return privateJson({ error: code }, { status: definite ? 422 : 502, headers: { "x-coast-error-code": code } });
   }
 }
 
@@ -94,7 +117,7 @@ async function materializePrivateMedia(
 ): Promise<typeof result> {
   const token = process.env.BLOB_READ_WRITE_TOKEN;
   if (!token) throw new Error("CREATIVE_BLOB_NOT_CONFIGURED");
-  const response = await fetch(result.url, { redirect: "error", signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(result.url, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
   if (!response.ok) throw new Error("CREATIVE_PROVIDER_MEDIA_UNAVAILABLE");
   const bytes = Buffer.from(await response.arrayBuffer());
   const limit = command === "imagine" ? 40 * 1024 * 1024 : 40 * 1024 * 1024;
@@ -158,24 +181,39 @@ async function submitGmi(model: string, input: Record<string, unknown>) {
   return { url: urlValue, mimeType: "image/png", filename: "coast-imagine.png", caption: "Here’s your image." };
 }
 
-async function submitFal(model: string, input: Record<string, unknown>) {
+type FalMedia = { url: string; mimeType: string; filename: string; caption: string };
+type FalResult =
+  | { status: "queued" | "running"; providerRequestId: string }
+  | { status: "completed"; providerRequestId?: string; media: FalMedia };
+
+function falMedia(body: { video?: { url?: string }; url?: string; output?: { video?: { url?: string } } }): FalMedia | null {
+  const url = body.video?.url ?? body.url ?? body.output?.video?.url;
+  return url ? { url, mimeType: "video/mp4", filename: "coast-zap.mp4", caption: "Here’s your 15-second zap." } : null;
+}
+
+async function submitFal(model: string, input: Record<string, unknown>): Promise<FalResult> {
   const key = process.env.FAL_KEY;
   if (!key) throw new Error("FAL_NOT_CONFIGURED");
-  const response = await fetch(`https://queue.fal.run/${model}`, { method: "POST", headers: { authorization: `Key ${key}`, "content-type": "application/json" }, body: JSON.stringify(input), signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) throw new Error(`FAL_HTTP_${response.status}`);
-  const body = await response.json() as { video?: { url?: string }; url?: string; request_id?: string; id?: string; response_url?: string; status_url?: string };
-  const immediate = body.video?.url ?? body.url;
-  const result = immediate ? { video: { url: immediate } } : await pollProviderResult(
-    body.request_id ?? body.id,
-    body.status_url,
-    body.response_url,
-    key,
-    (requestId) => `https://queue.fal.run/${model}/requests/${encodeURIComponent(requestId)}`,
-    (requestId) => `https://queue.fal.run/${model}/requests/${encodeURIComponent(requestId)}/status`,
-  );
-  const urlValue = result.video?.url ?? result.url ?? result.output?.video?.url;
-  if (!urlValue) throw new Error("FAL_RESULT_MISSING_URL");
-  return { url: urlValue, mimeType: "video/mp4", filename: "coast-zap.mp4", caption: "Here’s your 15-second zap." };
+  const client = createFalClient({ credentials: key.trim(), retry: { maxRetries: 0 } });
+  const queued = await client.queue.submit(model, {
+    input,
+    abortSignal: AbortSignal.timeout(20_000),
+  });
+  return { status: "queued", providerRequestId: queued.request_id };
+}
+
+async function pollFal(model: string, providerRequestId: string): Promise<FalResult> {
+  const key = process.env.FAL_KEY;
+  if (!key) throw new Error("FAL_NOT_CONFIGURED");
+  const client = createFalClient({ credentials: key.trim(), retry: { maxRetries: 0 } });
+  const status = await client.queue.status(model, { requestId: providerRequestId, abortSignal: AbortSignal.timeout(15_000) });
+  if (status.status === "IN_QUEUE") return { status: "queued", providerRequestId };
+  if (status.status === "IN_PROGRESS") return { status: "running", providerRequestId };
+  const result = await client.queue.result(model, { requestId: providerRequestId, abortSignal: AbortSignal.timeout(20_000) });
+  const body = result.data as { video?: { url?: string }; url?: string; output?: { video?: { url?: string } } };
+  const media = falMedia(body);
+  if (!media) throw new Error("FAL_RESULT_MISSING_URL");
+  return { status: "completed", providerRequestId, media };
 }
 
 async function pollProviderResult(

@@ -24,6 +24,7 @@
     "artists:import": "node --import tsx scripts/import-artists.ts"
   },
   "dependencies": {
+    "@fal-ai/client": "^1.10.1",
     "@photon-ai/chat-adapter-imessage": "3.2.0",
     "@stripe/link-cli": "0.14.0",
     "@vercel/blob": "^2.8.0",

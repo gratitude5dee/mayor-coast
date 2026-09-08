@@ -99,7 +99,25 @@ export async function POST(request: Request): Promise<Response> {
       const publicBase = env.COAST_PUBLIC_URL ?? new URL(request.url).origin;
       const cardUrl = new URL(`/draw/${encodeURIComponent(sessionId)}`, publicBase);
       cardUrl.hash = `secret=${encodeURIComponent(launchSecret)}`;
-      providerMessageId = (await adapter.sendMiniApp(threadId, cardUrl.toString())).id;
+      if (env.COAST_DRAW_APPLE_TEAM_ID && env.COAST_DRAW_EXTENSION_BUNDLE_ID) {
+        providerMessageId = (await adapter.sendMiniApp(threadId, {
+          appName: "COAST Draw",
+          teamId: env.COAST_DRAW_APPLE_TEAM_ID,
+          extensionBundleId: env.COAST_DRAW_EXTENSION_BUNDLE_ID,
+          ...(env.COAST_DRAW_APP_STORE_ID ? { appStoreId: env.COAST_DRAW_APP_STORE_ID } : {}),
+          url: cardUrl,
+          layout: {
+            caption: "COAST Draw",
+            subcaption: "Tap to sketch, then generate",
+            summary: "Open your private COAST drawing canvas",
+          },
+        })).id;
+      } else {
+        // A URL-only MSMessage balloon can fail to open when no matching
+        // Messages extension is installed. A normal HTTPS link reliably opens
+        // the hosted canvas while preserving the secret in the URL fragment.
+        providerMessageId = (await adapter.postMessage(threadId, `Open COAST Draw: ${cardUrl.toString()}`)).id;
+      }
     } else if (input.stage === "results") {
       const markdown = z
         .string()

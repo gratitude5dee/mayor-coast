@@ -11,6 +11,8 @@ import {
   topupMessage,
   validateAttachmentSizes,
 } from "../src/lib/creative";
+import { creativeRuntimeRequestSchema } from "../src/app/api/internal/creative/route";
+import { drawLaunchSecret, drawSessionCookie } from "../src/lib/draw/launch";
 
 describe("creative commands and credits", () => {
   it("parses text and one image edit without leaking attachment fields", () => {
@@ -48,6 +50,31 @@ describe("creative commands and credits", () => {
     const result = buildProviderRequest({ command: "zap", prompt: "a foggy bridge", attachments: [] });
     expect(result).toMatchObject({ provider: "fal", model: "minimax/h3-max-turbo/text-to-video" });
     expect(result.input.duration).toBe(VIDEO_DURATION_SECONDS);
+  });
+
+  it("accepts the fenced Convex worker envelope", () => {
+    expect(creativeRuntimeRequestSchema.safeParse({
+      jobId: "job-1",
+      attemptId: "attempt-1",
+      fencingToken: 1,
+      command: "zap",
+      encryptedPayload: "v1." + "x".repeat(40),
+    }).success).toBe(true);
+    expect(creativeRuntimeRequestSchema.safeParse({
+      operation: "poll",
+      jobId: "job-1",
+      attemptId: "attempt-1",
+      fencingToken: 1,
+      command: "zap",
+      encryptedPayload: "v1." + "x".repeat(40),
+    }).success).toBe(false);
+  });
+
+  it("reads draw authorization from the URL fragment and scopes its cookie to APIs", () => {
+    const secret = "secret-value-that-is-long-enough";
+    expect(drawLaunchSecret(`#secret=${encodeURIComponent(secret)}`)).toBe(secret);
+    expect(drawLaunchSecret("#unrelated=value")).toBeNull();
+    expect(drawSessionCookie("coast_draw_1", "browser-token", 3_600)).toContain("Path=/;");
   });
 
   it("gives the user a direct top-up explanation", () => {

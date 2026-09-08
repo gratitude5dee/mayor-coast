@@ -114,14 +114,33 @@ export const getDrawSession: any = action({
 export const admitDrawGeneration: any = action({
   args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), inputMediaId: v.optional(v.id("creativeMedia")), nowMs: v.number() },
   returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
-  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runMutation(internal.creative.admitDrawGeneration, args); },
+  handler: async (ctx, args) => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runMutation(internal.creative.admitDrawGeneration, {
+      sessionId: args.sessionId,
+      browserTokenHash: args.browserTokenHash,
+      requestKey: args.requestKey,
+      encryptedPayload: args.encryptedPayload,
+      prompt: args.prompt,
+      ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}),
+      nowMs: args.nowMs,
+    });
+  },
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const listDrawEvents: any = action({
   args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), afterSequence: v.optional(v.number()), nowMs: v.number() },
   returns: v.union(v.object({ events: v.array(v.object({ sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()) })), latest: v.union(v.number(), v.null()) }), v.null()),
-  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runQuery(internal.creative.listDrawEvents, args); },
+  handler: async (ctx, args) => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runQuery(internal.creative.listDrawEvents, {
+      sessionId: args.sessionId,
+      browserTokenHash: args.browserTokenHash,
+      ...(args.afterSequence === undefined ? {} : { afterSequence: args.afterSequence }),
+      nowMs: args.nowMs,
+    });
+  },
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -130,7 +149,17 @@ export const createDrawMedia: any = action({
   returns: v.union(v.id("creativeMedia"), v.null()),
   handler: async (ctx, args) => {
     assertServiceSecret(args.serviceSecret);
-    return await ctx.runMutation(internal.creative.createDrawMedia, args);
+    return await ctx.runMutation(internal.creative.createDrawMedia, {
+      sessionId: args.sessionId,
+      browserTokenHash: args.browserTokenHash,
+      sourceUrl: args.sourceUrl,
+      mimeType: args.mimeType,
+      filename: args.filename,
+      byteLength: args.byteLength,
+      width: args.width,
+      height: args.height,
+      nowMs: args.nowMs,
+    });
   },
 });
 

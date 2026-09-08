@@ -4,7 +4,7 @@ import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { serviceSecretFingerprintHex } from "./lib/service_auth";
-import { admitCreativeJob } from "./lib/creative";
+import { admitCreativeJob, releaseCreativeFunding } from "./lib/creative";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const IMAGE_FREE_LIMIT = 10;
@@ -281,12 +281,61 @@ export const claimForProcessing = internalMutation({
   },
 });
 
+const processingOwnership = {
+  jobId: v.id("creativeJobs"),
+  attemptId: v.string(),
+  fencingToken: v.number(),
+};
+
+export const recordProviderSubmission = internalMutation({
+  args: { ...processingOwnership, providerRequestId: v.string(), state: v.union(v.literal("queued"), v.literal("running")), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.state !== "submitting" || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken) return false;
+    await ctx.db.patch(job._id, {
+      providerRequestId: args.providerRequestId,
+      provider: job.command === "zap" ? "fal" : job.provider,
+      submittedAtMs: args.nowMs,
+      heartbeatAtMs: args.nowMs,
+      state: args.state,
+      lastErrorCode: undefined,
+      updatedAtMs: args.nowMs,
+    });
+    await ctx.scheduler.runAfter(5_000, internal.creative.poll, { jobId: job._id });
+    return true;
+  },
+});
+
+export const claimForPolling = internalMutation({
+  args: { jobId: v.id("creativeJobs"), nowMs: v.number() },
+  returns: v.union(v.object({ jobId: v.id("creativeJobs"), command: jobCommand, encryptedPayload: v.string(), attemptId: v.string(), fencingToken: v.number(), providerRequestId: v.string() }), v.null()),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || !["queued", "running", "retryable_failure"].includes(job.state) || !job.providerRequestId || !job.attemptId || !job.fencingToken || job.expiresAtMs <= args.nowMs) return null;
+    await ctx.db.patch(job._id, { heartbeatAtMs: args.nowMs, leaseExpiresAtMs: args.nowMs + 60_000, updatedAtMs: args.nowMs });
+    return { jobId: job._id, command: job.command, encryptedPayload: job.encryptedPayload, attemptId: job.attemptId, fencingToken: job.fencingToken, providerRequestId: job.providerRequestId };
+  },
+});
+
+export const recordProviderProgress = internalMutation({
+  args: { ...processingOwnership, state: v.union(v.literal("queued"), v.literal("running")), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || !["queued", "running", "retryable_failure"].includes(job.state) || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken || !job.providerRequestId) return false;
+    await ctx.db.patch(job._id, { state: args.state, heartbeatAtMs: args.nowMs, lastErrorCode: undefined, updatedAtMs: args.nowMs });
+    await ctx.scheduler.runAfter(5_000, internal.creative.poll, { jobId: job._id });
+    return true;
+  },
+});
+
 export const completeProcessing = internalMutation({
-  args: { jobId: v.id("creativeJobs"), url: v.string(), mimeType: v.string(), filename: v.string(), caption: v.string(), nowMs: v.number() },
+  args: { ...processingOwnership, url: v.string(), mimeType: v.string(), filename: v.string(), caption: v.string(), nowMs: v.number() },
   returns: v.null(),
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
-    if (job === null || job.state !== "submitting") return null;
+    if (job === null || !["submitting", "queued", "running", "retryable_failure"].includes(job.state) || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken) return null;
     const mediaId = await ctx.db.insert("creativeMedia", {
       jobId: job._id,
       ...(job.drawSessionId ? { drawSessionId: job.drawSessionId, userId: job.userId, role: "output" as const } : {}),
@@ -337,14 +386,38 @@ export const completeProcessing = internalMutation({
 });
 
 export const failProcessing = internalMutation({
-  args: { jobId: v.id("creativeJobs"), errorCode: v.string(), nowMs: v.number() },
+  args: { ...processingOwnership, errorCode: v.string(), outcome: v.union(v.literal("definitive"), v.literal("unknown"), v.literal("retryable")), nowMs: v.number() },
   returns: v.null(),
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
-    if (job !== null && job.state === "submitting") await ctx.db.patch(job._id, { state: "retryable_failure", updatedAtMs: args.nowMs });
+    if (!job || !["submitting", "queued", "running", "retryable_failure"].includes(job.state) || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken) return null;
+    if (args.outcome === "definitive") {
+      await ctx.db.patch(job._id, { state: "failed", lastErrorCode: args.errorCode, updatedAtMs: args.nowMs });
+      await releaseCreativeFunding(ctx, job, args.nowMs);
+    } else {
+      await ctx.db.patch(job._id, { state: args.outcome === "unknown" ? "submission_unknown" : "retryable_failure", lastErrorCode: args.errorCode, updatedAtMs: args.nowMs });
+      if (args.outcome === "retryable" && job.providerRequestId) await ctx.scheduler.runAfter(15_000, internal.creative.poll, { jobId: job._id });
+    }
     return null;
   },
 });
+
+async function runtimeErrorCode(response: Response): Promise<string> {
+  const header = response.headers.get("x-coast-error-code");
+  if (header && /^[A-Z0-9_]{3,120}$/iu.test(header)) return header.slice(0, 120);
+  try {
+    const body = await response.json() as { error?: unknown };
+    if (typeof body.error === "string" && /^[A-Z0-9_]{3,120}$/iu.test(body.error)) return body.error.slice(0, 120);
+  } catch {
+    // The HTTP status remains sufficient and contains no user content.
+  }
+  return `CREATIVE_RUNTIME_HTTP_${response.status}`;
+}
+
+function failureOutcome(status: number, hasProviderRequestId: boolean): "definitive" | "unknown" | "retryable" {
+  if (status >= 400 && status < 500) return "definitive";
+  return hasProviderRequestId ? "retryable" : "unknown";
+}
 
 export const run = internalAction({
   args: { jobId: v.id("creativeJobs") },
@@ -355,17 +428,56 @@ export const run = internalAction({
     const runtimeUrl = claim.command === "draw" ? process.env.COAST_DRAW_RUNTIME_URL : process.env.COAST_CREATIVE_RUNTIME_URL;
     const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
     if (!runtimeUrl || !secret) {
-      await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, errorCode: "CREATIVE_RUNTIME_NOT_CONFIGURED", nowMs: Date.now() });
+      await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: "CREATIVE_RUNTIME_NOT_CONFIGURED", outcome: "retryable", nowMs: Date.now() });
       return null;
     }
     try {
-      const response = await fetch(runtimeUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ jobId: claim.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, command: claim.command, encryptedPayload: claim.encryptedPayload }), signal: AbortSignal.timeout(claim.command === "draw" ? 270_000 : 25_000) });
-      if (!response.ok) throw new Error(`CREATIVE_RUNTIME_HTTP_${response.status}`);
-      const result = (await response.json()) as { url?: unknown; mimeType?: unknown; filename?: unknown; caption?: unknown };
-      if (typeof result.url !== "string" || typeof result.mimeType !== "string" || typeof result.filename !== "string") throw new Error("CREATIVE_RUNTIME_INVALID_RESULT");
-      await ctx.runMutation(internal.creative.completeProcessing, { jobId: args.jobId, url: result.url, mimeType: result.mimeType, filename: result.filename, caption: typeof result.caption === "string" ? result.caption : "Here’s your creation.", nowMs: Date.now() });
+      const requestBody = { jobId: claim.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, command: claim.command, encryptedPayload: claim.encryptedPayload, ...(claim.command === "draw" ? {} : { operation: "submit" as const }) };
+      const response = await fetch(runtimeUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify(requestBody), signal: AbortSignal.timeout(claim.command === "draw" ? 270_000 : 30_000) });
+      if (!response.ok) {
+        await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: await runtimeErrorCode(response), outcome: failureOutcome(response.status, false), nowMs: Date.now() });
+        return null;
+      }
+      const result = (await response.json()) as { status?: unknown; providerRequestId?: unknown; url?: unknown; mimeType?: unknown; filename?: unknown; caption?: unknown };
+      if ((result.status === "queued" || result.status === "running") && typeof result.providerRequestId === "string") {
+        await ctx.runMutation(internal.creative.recordProviderSubmission, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, providerRequestId: result.providerRequestId, state: result.status, nowMs: Date.now() });
+      } else if ((result.status === "completed" || claim.command === "draw") && typeof result.url === "string" && typeof result.mimeType === "string" && typeof result.filename === "string") {
+        await ctx.runMutation(internal.creative.completeProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, url: result.url, mimeType: result.mimeType, filename: result.filename, caption: typeof result.caption === "string" ? result.caption : "Here’s your creation.", nowMs: Date.now() });
+      } else {
+        await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: "CREATIVE_RUNTIME_INVALID_RESULT", outcome: "unknown", nowMs: Date.now() });
+      }
     } catch {
-      await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, errorCode: "CREATIVE_PROVIDER_FAILED", nowMs: Date.now() });
+      await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: "CREATIVE_SUBMISSION_UNKNOWN", outcome: "unknown", nowMs: Date.now() });
+    }
+    return null;
+  },
+});
+
+export const poll = internalAction({
+  args: { jobId: v.id("creativeJobs") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const claim = await ctx.runMutation(internal.creative.claimForPolling, { jobId: args.jobId, nowMs: Date.now() });
+    if (!claim) return null;
+    const runtimeUrl = claim.command === "draw" ? process.env.COAST_DRAW_RUNTIME_URL : process.env.COAST_CREATIVE_RUNTIME_URL;
+    const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
+    if (!runtimeUrl || !secret || claim.command === "draw") return null;
+    try {
+      const response = await fetch(runtimeUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ operation: "poll", jobId: claim.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, command: claim.command, encryptedPayload: claim.encryptedPayload, providerRequestId: claim.providerRequestId }), signal: AbortSignal.timeout(90_000) });
+      if (!response.ok) {
+        await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: await runtimeErrorCode(response), outcome: failureOutcome(response.status, true), nowMs: Date.now() });
+        return null;
+      }
+      const result = (await response.json()) as { status?: unknown; url?: unknown; mimeType?: unknown; filename?: unknown; caption?: unknown };
+      if (result.status === "queued" || result.status === "running") {
+        await ctx.runMutation(internal.creative.recordProviderProgress, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, state: result.status, nowMs: Date.now() });
+      } else if (result.status === "completed" && typeof result.url === "string" && typeof result.mimeType === "string" && typeof result.filename === "string") {
+        await ctx.runMutation(internal.creative.completeProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, url: result.url, mimeType: result.mimeType, filename: result.filename, caption: typeof result.caption === "string" ? result.caption : "Here’s your creation.", nowMs: Date.now() });
+      } else {
+        await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: "CREATIVE_RUNTIME_INVALID_RESULT", outcome: "retryable", nowMs: Date.now() });
+      }
+    } catch {
+      await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: "CREATIVE_POLL_FAILED", outcome: "retryable", nowMs: Date.now() });
     }
     return null;
   },

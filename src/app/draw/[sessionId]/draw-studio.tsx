@@ -2,7 +2,6 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import {
   DRAW_CANVAS_SIZE,
   canvasPoint,
@@ -11,6 +10,7 @@ import {
   type DrawPoint,
   type DrawStroke,
 } from "@/lib/draw/canvas";
+import { drawLaunchSecret } from "@/lib/draw/launch";
 
 type Props = { sessionId: string };
 type Job = { id: string; state: string; previewUrl?: string; outputUrl?: string } | null;
@@ -18,7 +18,6 @@ type Job = { id: string; state: string; previewUrl?: string; outputUrl?: string 
 const colors = ["#17231d", "#b45309", "#dc2626", "#2563eb", "#ffffff"];
 
 export default function DrawStudio({ sessionId }: Props) {
-  const search = useSearchParams();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [strokes, setStrokes] = useState<DrawStroke[]>([]);
   const [redo, setRedo] = useState<DrawStroke[]>([]);
@@ -32,12 +31,20 @@ export default function DrawStudio({ sessionId }: Props) {
   const [authorized, setAuthorized] = useState(false);
 
   useEffect(() => {
-    const secret = search.get("secret");
-    if (!secret) return;
-    void fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/exchange`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret }),
-    }).then((res) => { if (res.ok) { setAuthorized(true); history.replaceState(null, "", `/draw/${sessionId}`); } });
-  }, [search, sessionId]);
+    const secret = drawLaunchSecret(window.location.hash);
+    const endpoint = `/api/draw/sessions/${encodeURIComponent(sessionId)}`;
+    const request = secret
+      ? fetch(`${endpoint}/exchange`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret }) })
+      : fetch(`${endpoint}/status`, { cache: "no-store" });
+    void request.then((response) => {
+      if (!response.ok) {
+        setMessage(secret ? "This drawing link expired. Send /draw again for a fresh link." : "Open this canvas from its iMessage link.");
+        return;
+      }
+      setAuthorized(true);
+      if (secret) history.replaceState(null, "", `/draw/${encodeURIComponent(sessionId)}`);
+    }).catch(() => setMessage("COAST Draw could not connect. Try reopening the link."));
+  }, [sessionId]);
 
   useEffect(() => {
     if (!authorized) return;

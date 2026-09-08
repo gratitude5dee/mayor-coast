@@ -113,10 +113,10 @@ export async function POST(request: Request): Promise<Response> {
           },
         })).id;
       } else {
-        // A URL-only MSMessage balloon can fail to open when no matching
-        // Messages extension is installed. A normal HTTPS link reliably opens
-        // the hosted canvas while preserving the secret in the URL fragment.
-        providerMessageId = (await adapter.postMessage(threadId, `Open COAST Draw: ${cardUrl.toString()}`)).id;
+        // Photon renders this as its native URL mini-app balloon. It keeps the
+        // drawing experience in Messages while the signed extension is being
+        // distributed, and needs no client-specific extension identifier.
+        providerMessageId = (await adapter.sendMiniApp(threadId, cardUrl.toString())).id;
       }
     } else if (input.stage === "results") {
       const markdown = z

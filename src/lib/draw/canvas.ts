@@ -10,6 +10,16 @@ export type DrawStroke = {
   erase: boolean;
 };
 
+export function completedStroke(
+  points: DrawPoint[],
+  color: string,
+  width: number,
+  erase: boolean,
+): DrawStroke | null {
+  const finite = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  return finite.length === 0 ? null : { points: finite, color, width, erase };
+}
+
 /** Fit the whole source in a square, retaining its aspect ratio. */
 export function containImage(width: number, height: number, size = DRAW_CANVAS_SIZE) {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {

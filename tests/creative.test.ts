@@ -12,6 +12,7 @@ import {
   validateAttachmentSizes,
 } from "../src/lib/creative";
 import { creativeRuntimeRequestSchema } from "../src/app/api/internal/creative/route";
+import { completedStroke } from "../src/lib/draw/canvas";
 import { drawLaunchSecret, drawSessionCookie } from "../src/lib/draw/launch";
 
 describe("creative commands and credits", () => {
@@ -75,6 +76,16 @@ describe("creative commands and credits", () => {
     expect(drawLaunchSecret(`#secret=${encodeURIComponent(secret)}`)).toBe(secret);
     expect(drawLaunchSecret("#unrelated=value")).toBeNull();
     expect(drawSessionCookie("coast_draw_1", "browser-token", 3_600)).toContain("Path=/;");
+  });
+
+  it("keeps a single tap as a visible drawing stroke", () => {
+    expect(completedStroke([{ x: 12, y: 20 }], "#17231d", 18, false)).toEqual({
+      points: [{ x: 12, y: 20 }],
+      color: "#17231d",
+      width: 18,
+      erase: false,
+    });
+    expect(completedStroke([{ x: Number.NaN, y: 4 }], "#17231d", 18, false)).toBeNull();
   });
 
   it("gives the user a direct top-up explanation", () => {

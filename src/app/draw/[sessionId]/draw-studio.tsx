@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   DRAW_CANVAS_SIZE,
   canvasPoint,
+  completedStroke,
   hasVisibleInk,
   paintStroke,
   type DrawPoint,
@@ -19,6 +20,7 @@ const colors = ["#17231d", "#b45309", "#dc2626", "#2563eb", "#ffffff"];
 
 export default function DrawStudio({ sessionId }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const activePointerRef = useRef<number | null>(null);
   const [strokes, setStrokes] = useState<DrawStroke[]>([]);
   const [redo, setRedo] = useState<DrawStroke[]>([]);
   const [current, setCurrent] = useState<DrawPoint[]>([]);
@@ -42,7 +44,11 @@ export default function DrawStudio({ sessionId }: Props) {
         return;
       }
       setAuthorized(true);
-      if (secret) history.replaceState(null, "", `/draw/${encodeURIComponent(sessionId)}`);
+      if (secret) {
+        // Some Messages WebViews reject History API mutations. Authorization
+        // has already moved into the HttpOnly cookie, so failure here is safe.
+        try { history.replaceState(null, "", `/draw/${encodeURIComponent(sessionId)}`); } catch { /* constrained WebView */ }
+      }
     }).catch(() => setMessage("COAST Draw could not connect. Try reopening the link."));
   }, [sessionId]);
 
@@ -77,14 +83,24 @@ export default function DrawStudio({ sessionId }: Props) {
     return canvasPoint(event.clientX, event.clientY, rect);
   }
   function start(event: React.PointerEvent<HTMLCanvasElement>) {
-    event.currentTarget.setPointerCapture(event.pointerId); setCurrent([point(event)]);
+    event.preventDefault();
+    activePointerRef.current = event.pointerId;
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* iMessage WebView may not support capture */ }
+    setCurrent([point(event)]);
   }
   function move(event: React.PointerEvent<HTMLCanvasElement>) {
-    if (current.length === 0) return; setCurrent((value) => [...value, point(event)]);
+    if (activePointerRef.current !== event.pointerId) return;
+    event.preventDefault();
+    const next = point(event);
+    setCurrent((value) => value.length >= 4_096 ? value : [...value, next]);
   }
-  function end() {
-    if (current.length < 2) { setCurrent([]); return; }
-    setStrokes((value) => [...value, { points: current, color, width: size, erase: eraser }]); setRedo([]); setCurrent([]);
+  function end(event?: React.PointerEvent<HTMLCanvasElement>) {
+    if (event && activePointerRef.current !== event.pointerId) return;
+    const stroke = completedStroke(current, color, size, eraser);
+    activePointerRef.current = null;
+    if (stroke) setStrokes((value) => [...value, stroke]);
+    setRedo([]);
+    setCurrent([]);
   }
   async function generate() {
     if (!authorized) { setMessage("Open this card from the iMessage conversation first."); return; }
@@ -93,7 +109,14 @@ export default function DrawStudio({ sessionId }: Props) {
     const ctx = canvas.getContext("2d");
     if (!ctx || (!prompt.trim() && !hasVisibleInk(ctx.getImageData(0, 0, canvas.width, canvas.height).data))) { setMessage("Add a sketch or a prompt before generating."); return; }
     setMessage("Preparing…");
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    const flattened = document.createElement("canvas");
+    flattened.width = DRAW_CANVAS_SIZE; flattened.height = DRAW_CANVAS_SIZE;
+    const flattenedContext = flattened.getContext("2d");
+    if (!flattenedContext) { setMessage("The sketch could not be prepared. Try again."); return; }
+    flattenedContext.fillStyle = "#ffffff";
+    flattenedContext.fillRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
+    flattenedContext.drawImage(canvas, 0, 0);
+    const blob = await new Promise<Blob | null>((resolve) => flattened.toBlob(resolve, "image/png"));
     let mediaId: string | undefined;
     if (blob && ctx && hasVisibleInk(ctx.getImageData(0, 0, canvas.width, canvas.height).data)) {
       const upload = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/media`, { method: "POST", headers: { "content-type": "image/png" }, body: blob });
@@ -110,7 +133,7 @@ export default function DrawStudio({ sessionId }: Props) {
 
   return <main className="draw-shell">
     <div className="draw-header"><div><p className="eyebrow">COAST DRAW</p><h1>Sketch a move</h1></div><span className="status">{job?.state ?? "Ready"}</span></div>
-    <div className="draw-layout"><section className="canvas-wrap"><canvas ref={canvasRef} onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} aria-label="Drawing canvas" /><div className="canvas-hint">1024 × 1024 canvas</div></section>
+    <div className="draw-layout"><section className="canvas-wrap"><canvas ref={canvasRef} onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} aria-label="Drawing canvas" /><div className="canvas-hint">1024 × 1024 canvas</div></section>
       <section className="controls"><label>Prompt (optional)<textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Turn this sketch into…" /></label>
         <div className="palette">{colors.map((value) => <button key={value} className="swatch" style={{ background: value }} aria-label={`Use ${value}`} onClick={() => { setColor(value); setEraser(false); }} />)}</div>
         <label>Brush size <input type="range" min="4" max="64" value={size} onChange={(e) => setSize(Number(e.target.value))} /></label>

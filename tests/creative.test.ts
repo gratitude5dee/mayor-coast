@@ -13,7 +13,12 @@ import {
   topupMessage,
   validateAttachmentSizes,
 } from "../src/lib/creative";
-import { creativeRuntimeRequestSchema, falRequestId } from "../src/app/api/internal/creative/route";
+import {
+  creativeRuntimeRequestSchema,
+  falQueueUrl,
+  falRequestId,
+  falRequestUrl,
+} from "../src/app/api/internal/creative/route";
 import { completedStroke } from "../src/lib/draw/canvas";
 import { drawLaunchSecret, drawSessionCookie } from "../src/lib/draw/launch";
 import { resolveMiniApp } from "@photon-ai/chat-adapter-imessage";
@@ -61,6 +66,18 @@ describe("creative commands and credits", () => {
     expect(falRequestId({ requestId: "compat-id" })).toBe("compat-id");
     expect(falRequestId({}, "header-id")).toBe("header-id");
     expect(falRequestId({})).toBeNull();
+  });
+
+  it("uses Fal operation routes for submission and canonical model routes for requests", () => {
+    expect(falQueueUrl("minimax/h3-max-turbo/text-to-video")).toBe(
+      "https://queue.fal.run/minimax/h3-max-turbo/text-to-video",
+    );
+    expect(falRequestUrl("minimax/h3-max-turbo/text-to-video", "request_123", "/status")).toBe(
+      "https://queue.fal.run/minimax/h3-max-turbo/requests/request_123/status",
+    );
+    expect(falRequestUrl("minimax/h3-max/reference-to-video", "request_456")).toBe(
+      "https://queue.fal.run/minimax/h3-max/requests/request_456",
+    );
   });
 
   it("polls images aggressively and scores their delivery target", () => {

@@ -7,6 +7,7 @@ import {
   validateAttachmentSizes,
   type CreativeAttachment,
 } from "@/lib/creative";
+import { parseServerEnv } from "@/lib/env";
 import { decryptCreativePayload } from "@/lib/security/identity";
 import { authorizeInternalRequest, privateJson } from "@/lib/security/internal-auth";
 
@@ -35,8 +36,12 @@ export const creativeRuntimeRequestSchema = z.union([
 
 export async function POST(request: Request): Promise<Response> {
   if (!authorizeInternalRequest(request)) return privateJson({ error: "unauthorized" }, { status: 401 });
-  const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
-  if (!secret) return privateJson({ error: "creative_not_configured" }, { status: 503 });
+  let secret: string;
+  try {
+    secret = parseServerEnv().convexServiceSecret;
+  } catch {
+    return privateJson({ error: "creative_not_configured" }, { status: 503 });
+  }
   let input: z.infer<typeof creativeRuntimeRequestSchema>;
   try { input = creativeRuntimeRequestSchema.parse(await request.json()); } catch { return privateJson({ error: "invalid_request" }, { status: 400 }); }
   try {
@@ -107,7 +112,9 @@ export async function POST(request: Request): Promise<Response> {
     const errorStatus = typeof (error as { status?: unknown })?.status === "number"
       ? (error as { status: number }).status
       : null;
-    const rawCode = errorStatus !== null
+    const rawCode = error instanceof Error && error.message.startsWith("Encrypted creative payload")
+      ? "CREATIVE_PAYLOAD_AUTH_FAILED"
+      : errorStatus !== null
       ? `FAL_HTTP_${errorStatus}`
       : error instanceof Error ? error.message.slice(0, 120) : "creative_provider_failed";
     const code = /^[A-Z0-9_]{3,120}$/u.test(rawCode) ? rawCode : "CREATIVE_PROVIDER_RESPONSE_INVALID";
@@ -210,12 +217,21 @@ export function falRequestId(
     : null;
 }
 
-function falQueueUrl(model: string, requestId?: string, suffix = ""): string {
+export function falQueueUrl(model: string): string {
   if (!/^[a-z0-9][a-z0-9/_-]{2,160}$/u.test(model)) throw new Error("FAL_MODEL_INVALID");
-  const base = `https://queue.fal.run/${model}`;
-  return requestId
-    ? `${base}/requests/${encodeURIComponent(requestId)}${suffix}`
-    : base;
+  return `https://queue.fal.run/${model}`;
+}
+
+export function falRequestUrl(model: string, requestId: string, suffix = ""): string {
+  if (!/^[A-Za-z0-9_-]{8,512}$/u.test(requestId)) throw new Error("FAL_REQUEST_ID_INVALID");
+  const requestBaseByModel: Readonly<Record<string, string>> = {
+    "minimax/h3-max-turbo/text-to-video": "minimax/h3-max-turbo",
+    "minimax/h3-max-turbo/image-to-video": "minimax/h3-max-turbo",
+    "minimax/h3-max/reference-to-video": "minimax/h3-max",
+  };
+  const requestBase = requestBaseByModel[model];
+  if (!requestBase) throw new Error("FAL_MODEL_INVALID");
+  return `https://queue.fal.run/${requestBase}/requests/${encodeURIComponent(requestId)}${suffix}`;
 }
 
 async function falJson(
@@ -258,7 +274,7 @@ async function pollFal(model: string, providerRequestId: string): Promise<FalRes
   const key = process.env.FAL_KEY;
   if (!key) throw new Error("FAL_NOT_CONFIGURED");
   const headers = { accept: "application/json", authorization: `Key ${key.trim()}` };
-  const statusResponse = await fetch(falQueueUrl(model, providerRequestId, "/status"), {
+  const statusResponse = await fetch(falRequestUrl(model, providerRequestId, "/status"), {
     headers,
     signal: AbortSignal.timeout(15_000),
   });
@@ -266,7 +282,7 @@ async function pollFal(model: string, providerRequestId: string): Promise<FalRes
   if (status.status === "IN_QUEUE") return { status: "queued", providerRequestId };
   if (status.status === "IN_PROGRESS") return { status: "running", providerRequestId };
   if (status.status !== "COMPLETED") throw new Error("FAL_STATUS_INVALID");
-  const resultResponse = await fetch(falQueueUrl(model, providerRequestId), {
+  const resultResponse = await fetch(falRequestUrl(model, providerRequestId), {
     headers,
     signal: AbortSignal.timeout(20_000),
   });
@@ -291,7 +307,7 @@ async function runFalCanary(): Promise<{ status: "ok"; cancelled: boolean }> {
   }
   const key = process.env.FAL_KEY;
   if (!key) throw new Error("FAL_NOT_CONFIGURED");
-  const response = await fetch(falQueueUrl(model, queued.providerRequestId, "/cancel"), {
+  const response = await fetch(falRequestUrl(model, queued.providerRequestId, "/cancel"), {
     method: "PUT",
     headers: { accept: "application/json", authorization: `Key ${key.trim()}` },
     signal: AbortSignal.timeout(10_000),

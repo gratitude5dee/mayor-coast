@@ -395,6 +395,38 @@ export const releaseLegacyUnknown = internalMutation({
   },
 });
 
+export const recoverUnknownWithProviderId = internalMutation({
+  args: {
+    jobId: v.id("creativeJobs"),
+    expectedErrorCode: v.string(),
+    providerRequestId: v.string(),
+    nowMs: v.number(),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (
+      !job ||
+      job.command !== "zap" ||
+      job.state !== "submission_unknown" ||
+      job.providerRequestId !== undefined ||
+      job.lastErrorCode !== args.expectedErrorCode ||
+      args.providerRequestId.trim().length === 0
+    ) return false;
+    await ctx.db.patch(job._id, {
+      state: "queued",
+      provider: "fal",
+      providerRequestId: args.providerRequestId.trim(),
+      submittedAtMs: args.nowMs,
+      heartbeatAtMs: args.nowMs,
+      lastErrorCode: undefined,
+      updatedAtMs: args.nowMs,
+    });
+    await ctx.scheduler.runAfter(0, internal.creative.poll, { jobId: job._id });
+    return true;
+  },
+});
+
 async function runtimeErrorCode(response: Response): Promise<string> {
   const header = response.headers.get("x-coast-error-code");
   if (header && /^[A-Z0-9_]{3,120}$/iu.test(header)) return header.slice(0, 120);

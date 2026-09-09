@@ -263,6 +263,7 @@ export default defineSchema({
   })
     .index("by_request_key", ["requestKey"])
     .index("by_delivery", ["deliveryId"])
+    .index("by_user_created", ["userId", "createdAtMs"])
     .index("by_user_state", ["userId", "state"])
     .index("by_session_created", ["drawSessionId", "createdAtMs"])
     .index("by_lease", ["state", "leaseExpiresAtMs"])
@@ -300,6 +301,7 @@ export default defineSchema({
     admittedAtMs: v.number(),
     settled: v.boolean(),
   })
+    .index("by_user_admitted", ["userId", "admittedAtMs"])
     .index("by_user_kind_admitted", ["userId", "kind", "admittedAtMs"])
     .index("by_user_kind_settled", ["userId", "kind", "settled", "admittedAtMs"])
     .index("by_reservation", ["reservationId"]),
@@ -371,7 +373,16 @@ export default defineSchema({
     updatedAtMs: v.number(),
   })
     .index("by_order", ["orderId"])
+    .index("by_user_created", ["userId", "createdAtMs"])
     .index("by_user_status", ["userId", "status"]),
+
+  adminLoginAttempts: defineTable({
+    clientHash: v.string(),
+    attemptCount: v.number(),
+    windowStartedAtMs: v.number(),
+    lastAttemptAtMs: v.number(),
+    lockedUntilMs: v.optional(v.number()),
+  }).index("by_client", ["clientHash"]),
 
   creativePaymentEvents: defineTable({
     eventId: v.string(),

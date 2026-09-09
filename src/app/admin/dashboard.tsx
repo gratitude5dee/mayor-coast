@@ -17,6 +17,20 @@ const sections = {
 type Section = keyof typeof sections;
 type Row = Record<string, string | number | null>;
 type Result = { page: Row[]; isDone: boolean; continueCursor: string; updatedAt: number };
+type AdminUser = {
+  userId: string;
+  userAddress: string | null;
+  userPhone: string | null;
+  userEmail: string | null;
+  photonLine: string | null;
+  photonPhone: string | null;
+  status: string;
+  createdAtMs: number;
+  lastSeenAtMs: number;
+  balanceCents: number;
+  activeJobId: string | null;
+};
+type UsersResult = { users: AdminUser[]; updatedAt: number };
 function label(key: string) { return key === "_id" ? "Record" : key.replace(/([A-Z])/g, " $1").replace(/At Ms$/, " at").replace(/ Cents$/, " (USD)"); }
 function display(key: string, value: Row[string]) {
   if (value === null) return "—";
@@ -35,18 +49,30 @@ export default function AdminDashboard() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("");
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const query = new URLSearchParams({ section }); if (cursor) query.set("cursor", cursor);
-      const response = await fetch(`/api/admin/records?${query}`, { cache: "no-store", ...(signal ? { signal } : {}) });
+      const query = new URLSearchParams({ section });
+      if (cursor) query.set("cursor", cursor);
+      if (userId) query.set("userId", userId);
+      const [response, usersResponse] = await Promise.all([
+        fetch(`/api/admin/records?${query}`, { cache: "no-store", ...(signal ? { signal } : {}) }),
+        fetch("/api/admin/users", { cache: "no-store", ...(signal ? { signal } : {}) }),
+      ]);
       if (signal?.aborted) return;
-      if (response.status === 401) { setLocked(true); setResult(null); return; }
+      if (response.status === 401 || usersResponse.status === 401) { setLocked(true); setResult(null); return; }
       if (!response.ok) throw new Error("Unable to refresh. Last successful data remains below.");
       const body = await response.json() as Result;
+      if (usersResponse.ok) {
+        const userBody = await usersResponse.json() as UsersResult;
+        setUsers(userBody.users);
+        if (userId === null) setUserId(userBody.users[0]?.userId ?? "");
+      }
       if (signal?.aborted) return;
       setResult(body); setLocked(false); setError("");
     } catch (e) { if (!signal?.aborted) setError(e instanceof Error ? e.message : "Unable to refresh"); }
-  }, [section, cursor]);
+  }, [section, cursor, userId]);
   useEffect(() => {
     const controller = new AbortController();
     const initial = window.setTimeout(() => void refresh(controller.signal), 0);
@@ -64,10 +90,28 @@ export default function AdminDashboard() {
   }
   const rows = (result?.page ?? []).filter((row) => Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(filter.toLowerCase())));
   const columns = Object.keys(result?.page[0] ?? {});
+  const selectedUser = users.find((user) => user.userId === userId);
+  const userName = (user: AdminUser) => user.userPhone ?? user.userEmail ?? `User ${user.userId.slice(-8)}`;
+  const photonName = (user: AdminUser) => user.photonPhone ?? (user.photonLine === "shared" ? "Photon shared line" : user.photonLine ?? "Photon line unavailable");
   return <main className={styles.shell}>
     <header className={styles.header}><div><p className={styles.eyebrow}>COAST / OPERATIONS</p><h1>A clear view of the coast.</h1><p>Activity, generation, and account health.</p></div>{!locked && <button onClick={async () => { const response = await fetch("/api/admin/session", { method: "DELETE" }); if (response.ok) { setLocked(true); setResult(null); } }}>Sign out</button>}</header>
-    {locked ? <form onSubmit={login} className={styles.login}><h2>Admin access</h2><p>Enter your private operations access key. Sessions last eight hours.</p><label>Access key<input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label><button disabled={busy}>{busy ? "Signing in…" : "Open dashboard"}</button><p role="alert">{error}</p></form> : <>
+    {locked ? <form onSubmit={login} className={styles.login}><h2>Admin access</h2><p>Enter your private operations access key. Sessions last eight hours; repeated failed attempts are rate limited.</p><label>Access key<input type="password" minLength={4} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label><button disabled={busy}>{busy ? "Signing in…" : "Open dashboard"}</button><p role="alert">{error}</p></form> : <>
       <nav className={styles.nav}>{Object.entries(sections).map(([key, name]) => <button key={key} aria-current={section === key ? "page" : undefined} onClick={() => { setSection(key as Section); setCursor(null); setPrevious([]); setFilter(""); setResult(null); }}>{name}</button>)}</nav>
+      <section className={styles.userBar}>
+        <label>User
+          <select value={userId ?? ""} onChange={(event) => { setUserId(event.target.value); setCursor(null); setPrevious([]); setResult(null); }}>
+            <option value="">All users</option>
+            {users.map((user) => <option key={user.userId} value={user.userId}>{userName(user)} · {photonName(user)}</option>)}
+          </select>
+        </label>
+        {selectedUser ? <dl>
+          <div><dt>User</dt><dd>{userName(selectedUser)}</dd></div>
+          <div><dt>Photon line</dt><dd>{photonName(selectedUser)}</dd></div>
+          <div><dt>Status</dt><dd>{selectedUser.status}</dd></div>
+          <div><dt>Last active</dt><dd>{new Date(selectedUser.lastSeenAtMs).toLocaleString()}</dd></div>
+          <div><dt>Purchased balance</dt><dd>{display("balanceCents", selectedUser.balanceCents)}</dd></div>
+        </dl> : <p>Showing records across all users.</p>}
+      </section>
       <section className={styles.cards}><article><span>View</span><strong>{sections[section]}</strong><small>Newest records first</small></article><article><span>Records on this page</span><strong>{result?.page.length ?? "…"}</strong><small>Browse older records below</small></article><article><span>Last refreshed</span><strong>{result ? new Date(result.updatedAt).toLocaleTimeString() : "Loading…"}</strong><small>Refreshes every 15 seconds</small></article></section>
       <section className={styles.panel}><div className={styles.controls}><h2>{sections[section]}</h2><input aria-label="Filter current page" placeholder="Filter this page by user, state, or ID…" value={filter} onChange={(e) => setFilter(e.target.value)} /><button onClick={() => void refresh()}>Refresh</button></div>
         {section === "messages" && <p>Message metadata only. The dashboard excludes message bodies and provider message identifiers.</p>}
@@ -79,7 +123,7 @@ export default function AdminDashboard() {
         {error && <p role="alert">{error}</p>}
         <div className={styles.table}><table><thead><tr>{columns.map((key) => <th key={key}>{label(key)}</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={String(row._id)}>{columns.map((key) => <td key={key} title={String(row[key] ?? "")}>{display(key, row[key] ?? null)}</td>)}</tr>)}</tbody></table>{!result ? <p>Loading records…</p> : !rows.length && <p>No records match this view.</p>}</div>
         <footer className={styles.controls}><button disabled={!previous.length} onClick={() => { setCursor(previous.at(-1) ?? null); setPrevious((value) => value.slice(0, -1)); setResult(null); }}>Previous</button><span>Page {previous.length + 1} · Up to 50 records per page</span><button disabled={!result || result.isDone} onClick={() => { if (result) { setPrevious((value) => [...value, cursor]); setCursor(result.continueCursor); setResult(null); } }}>Older records</button></footer>
-      </section><p className={styles.footnote}>Private operational records · Amounts in USD · Prompts, message contents, media, addresses, and wallet credentials are excluded.</p>
+      </section><p className={styles.footnote}>Private operational records · Amounts in USD · User and Photon addresses appear only in the authenticated user view; prompts, message contents, media, and wallet credentials are excluded.</p>
     </>}
   </main>;
 }

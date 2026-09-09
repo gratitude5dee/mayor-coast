@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { fields } from "../convex/admin";
 import { adminSession, validAdminSession } from "@/lib/admin-auth";
+import { adminIdentityFromEncryptedThreadRef } from "@/lib/admin-identities";
+import { encryptThreadReference } from "@/lib/security/identity";
 
 describe("COAST admin sessions", () => {
   const secret = "service-secret-with-at-least-thirty-two-characters";
@@ -48,5 +50,47 @@ describe("COAST admin privacy projection", () => {
     expect(fields.payments).toEqual(expect.arrayContaining(["paymentPath", "status", "chargeCents", "creditCents"]));
     expect(fields.balances).toContain("balanceCents");
     expect(fields.usage).toEqual(expect.arrayContaining(["kind", "admittedAtMs", "settled"]));
+  });
+});
+
+describe("COAST admin user identity", () => {
+  const secret = "service-secret-with-at-least-thirty-two-characters";
+
+  it("shows the user and dedicated Photon phone from an authenticated encrypted thread reference", () => {
+    const encrypted = encryptThreadReference(
+      "imessage:iMessage;-;+14155550100~+14155550999",
+      secret,
+    );
+    expect(adminIdentityFromEncryptedThreadRef(encrypted, secret)).toEqual({
+      userAddress: "+14155550100",
+      userPhone: "+14155550100",
+      userEmail: null,
+      photonLine: "+14155550999",
+      photonPhone: "+14155550999",
+    });
+  });
+
+  it("labels a shared Photon line without inventing a phone number", () => {
+    const encrypted = encryptThreadReference(
+      "imessage:iMessage;-;person@example.com~shared",
+      secret,
+    );
+    expect(adminIdentityFromEncryptedThreadRef(encrypted, secret)).toEqual({
+      userAddress: "person@example.com",
+      userPhone: null,
+      userEmail: "person@example.com",
+      photonLine: "shared",
+      photonPhone: null,
+    });
+  });
+
+  it("does not expose malformed or unauthenticated thread references", () => {
+    expect(adminIdentityFromEncryptedThreadRef("malformed", secret)).toEqual({
+      userAddress: null,
+      userPhone: null,
+      userEmail: null,
+      photonLine: null,
+      photonPhone: null,
+    });
   });
 });

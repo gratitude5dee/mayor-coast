@@ -58,9 +58,11 @@ Creative deployment settings are `COAST_CREATIVE_RUNTIME_URL`, `COAST_DRAW_RUNTI
 
 ## Operations dashboard
 
-The private dashboard at `/admin` shows paginated creative jobs, turn and message metadata, free-usage reservations, top-up orders, payment-event deduplication records, purchased balances, ledger entries, Link connection status, and outbound delivery state. It refreshes every 15 seconds. Its Convex query projects a fixed allowlist: prompts, message bodies, sender addresses, private media, checkout URLs, and wallet credentials never reach the browser.
+The private dashboard at `/admin` shows paginated creative jobs, turn and message metadata, free-usage reservations, top-up orders, payment-event deduplication records, purchased balances, ledger entries, Link connection status, and outbound delivery state. It refreshes every 15 seconds. Record tables use a fixed allowlist: prompts, message bodies, private media, checkout URLs, and wallet credentials never reach the browser. The authenticated user header may show the user address and originating Photon line as described below.
 
-Access uses an eight-hour Secure, HttpOnly session. Store only the SHA-256 hash of a high-entropy access key in the production Convex environment as `COAST_ADMIN_PASSWORD_HASH`. Rotate the key by replacing that hash; existing browser sessions expire independently after eight hours.
+Access uses an eight-hour Secure, HttpOnly session. Store only the SHA-256 hash of the access key in the production Convex environment as `COAST_ADMIN_PASSWORD_HASH`. Login attempts are rate limited per client. Rotate the key by replacing that hash; existing browser sessions expire independently after eight hours.
+
+The user selector groups jobs, interactions, usage, payments, balances, ledger entries, Link state, and delivery records by COAST user. The authenticated user summary decrypts the latest verified iMessage thread reference in the Vercel route so operators can see the user phone or email and the originating Photon line. Convex and the dashboard record tables continue to use pseudonymous user IDs, and a Photon `shared` line is labeled as shared rather than represented as a phone number.
 
 ## Fixed dataset
 

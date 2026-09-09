@@ -14,10 +14,17 @@
 .shell button { background: #263d30; border: 1px solid #47604e; border-radius: 10px; color: #f7f1df; padding: 12px 16px; cursor: pointer; min-height: 44px; }
 .shell button:disabled { opacity: .4; cursor: default; }
 .shell button:hover:not(:disabled) { background: #38513e; }
-.shell input { background: #102019; color: #fff; border: 1px solid #526b58; border-radius: 10px; padding: 13px; font: inherit; }
-.shell input:focus { outline: 2px solid #efba56; }
+.shell input, .shell select { background: #102019; color: #fff; border: 1px solid #526b58; border-radius: 10px; padding: 13px; font: inherit; }
+.shell input:focus, .shell select:focus { outline: 2px solid #efba56; }
 .nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 24px 0; }
 .nav button[aria-current] { background: #efba56; color: #15221a; border-color: #efba56; }
+.userBar { display: grid; grid-template-columns: minmax(240px, 340px) 1fr; gap: 24px; align-items: end; border: 1px solid #354a3c; border-radius: 18px; background: #1b2c22; padding: 20px 24px; margin-bottom: 24px; }
+.userBar label { display: grid; gap: 9px; color: #b6c6b9; font-size: 13px; }
+.userBar dl { display: grid; grid-template-columns: repeat(5, minmax(100px, 1fr)); gap: 16px; margin: 0; }
+.userBar dl div { min-width: 0; }
+.userBar dt { color: #91a596; font-size: 11px; margin-bottom: 6px; }
+.userBar dd { color: #f7f1df; font-size: 13px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.userBar p { color: #adbfb1; margin: 0; }
 .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
 .cards article, .panel, .login { border: 1px solid #354a3c; border-radius: 18px; background: #1b2c22; padding: 24px; }
 .cards span, .cards small { display: block; color: #adbfb1; font-size: 13px; }
@@ -40,6 +47,8 @@
 @media (max-width: 700px) {
   .cards { grid-template-columns: 1fr; }
   .header { align-items: flex-start; }
+  .userBar { grid-template-columns: 1fr; align-items: stretch; }
+  .userBar dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .panel { padding: 16px; }
   .cards article { padding: 18px; }
   .cards strong { margin: 8px 0; }

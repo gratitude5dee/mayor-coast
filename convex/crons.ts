@@ -45,6 +45,13 @@ crons.interval(
   {},
 );
 
+crons.daily(
+  "backfill creative image and video slots",
+  { hourUTC: 11, minuteUTC: 23 },
+  internal.creative.backfillActiveSlots,
+  { cursor: null },
+);
+
 crons.interval(
   "catch up native Photon poll votes",
   { minutes: 1 },

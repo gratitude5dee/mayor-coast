@@ -236,15 +236,18 @@ export default defineSchema({
     encryptedPayload: v.string(),
     provider: v.optional(v.union(v.literal("gmi"), v.literal("fal"), v.literal("openai"))),
     drawSessionId: v.optional(v.id("drawSessions")),
-    drawMode: v.optional(v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"))),
+    drawMode: v.optional(v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"), v.literal("hq"))),
     providerModel: v.optional(v.string()),
     revisionKey: v.optional(v.string()),
     inputMediaId: v.optional(v.id("creativeMedia")),
+    inputCategory: v.optional(v.union(v.literal("prompt"), v.literal("sketch"), v.literal("photo"), v.literal("result"))),
     outputMediaId: v.optional(v.id("creativeMedia")),
     fundingStatus: v.optional(v.union(v.literal("reserved"), v.literal("settled"), v.literal("released"), v.literal("awaiting_payment"))),
     attemptId: v.optional(v.string()),
     fencingToken: v.optional(v.number()),
     submittedAtMs: v.optional(v.number()),
+    admittedAtMs: v.optional(v.number()),
+    firstStateAtMs: v.optional(v.number()),
     completedAtMs: v.optional(v.number()),
     deliveredAtMs: v.optional(v.number()),
     latencyReward: v.optional(v.number()),
@@ -312,7 +315,12 @@ export default defineSchema({
     userId: v.id("coastUsers"),
     balanceCents: v.number(),
     reconciledAtMs: v.optional(v.number()),
+    // `activeJobId` is retained for records created before per-media slots.
+    // New admissions use the matching slot, which permits one image and one
+    // video render to run at the same time without sharing a lock.
     activeJobId: v.optional(v.id("creativeJobs")),
+    activeImageJobId: v.optional(v.id("creativeJobs")),
+    activeVideoJobId: v.optional(v.id("creativeJobs")),
     updatedAtMs: v.number(),
   }).index("by_user", ["userId"]),
 
@@ -321,6 +329,9 @@ export default defineSchema({
     threadId: v.id("coastThreads"),
     sourceMessageId: v.id("coastMessages"),
     turnId: v.id("coastTurns"),
+    // Retries of the same Photon webhook reuse a card; every distinct /draw
+    // request receives an independent session and launch secret.
+    requestKey: v.optional(v.string()),
     launchSecretHash: v.string(),
     encryptedLaunchSecret: v.string(),
     launchExpiresAtMs: v.number(),
@@ -335,7 +346,7 @@ export default defineSchema({
     createdAtMs: v.number(),
     updatedAtMs: v.number(),
     expiresAtMs: v.number(),
-  }).index("by_user_status", ["userId", "status"]).index("by_expiry", ["expiresAtMs"]),
+  }).index("by_user_status", ["userId", "status"]).index("by_expiry", ["expiresAtMs"]).index("by_request_key", ["requestKey"]),
 
   drawEvents: defineTable({
     sessionId: v.id("drawSessions"),

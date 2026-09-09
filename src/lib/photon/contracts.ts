@@ -35,6 +35,8 @@ export type InboundClaimInput = {
   };
   creativeCommand?: CreativeCommand;
   creativeCommandAmbiguous?: boolean;
+  /** `/zap animate this` without an attachment may use the latest Draw result. */
+  animateLatestDraw?: boolean;
   encryptedCreativePayload?: string;
 };
 

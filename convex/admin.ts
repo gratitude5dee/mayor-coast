@@ -6,7 +6,7 @@ import { assertVercelServiceSecret } from "./lib/service_auth";
 
 import type { GenericTableInfo, OrderedQuery } from "convex/server";
 import type { QueryCtx } from "./_generated/server";
-import { CREATIVE_ACTIVE_STATES, findActiveJob, getCreativeCredits } from "./lib/creative";
+import { CREATIVE_ACTIVE_STATES, getCreativeCredits } from "./lib/creative";
 import { deliveryOwner } from "./lib/adminOwnership";
 import { userStatus } from "./lib/validators";
 
@@ -154,7 +154,7 @@ const tables = {
 // Explicit projection: never send prompts, message bodies, addresses, auth,
 // private media URLs, payment URLs, or encrypted payloads to the dashboard.
 export const fields = {
-  jobs: ["_id", "userId", "threadId", "turnId", "lastErrorCode", "command", "state", "provider", "providerModel", "drawMode", "reservationSource", "reservedCents", "fundingStatus", "createdAtMs", "submittedAtMs", "firstPreviewAtMs", "completedAtMs", "deliveredAtMs"],
+  jobs: ["_id", "userId", "threadId", "turnId", "lastErrorCode", "command", "state", "provider", "providerModel", "drawMode", "inputCategory", "reservationSource", "reservedCents", "fundingStatus", "admittedAtMs", "createdAtMs", "submittedAtMs", "firstStateAtMs", "firstPreviewAtMs", "completedAtMs", "deliveredAtMs"],
   interactions: ["_id", "userId", "threadId", "state", "origin", "creativeCommand", "generationElapsedMs", "lastErrorCode", "createdAtMs", "updatedAtMs"],
   messages: ["_id", "userId", "threadId", "turnId", "direction", "createdAtMs", "deletedAtMs", "privacyRedactedAtMs"],
   usage: ["_id", "userId", "kind", "jobId", "admittedAtMs", "settled"],
@@ -218,23 +218,35 @@ export const summary = query({
     user: personValidator,
     imageFreeRemaining: v.number(), videoFreeRemaining: v.number(), creditCents: v.number(),
     reservedImageCount: v.number(), reservedVideoCount: v.number(), reservedCreditCents: v.number(),
-    activeJob: v.union(recordValidator, v.null()), linkStatus: v.union(v.string(), v.null()),
+    activeJob: v.union(recordValidator, v.null()),
+    activeImageJob: v.union(recordValidator, v.null()),
+    activeVideoJob: v.union(recordValidator, v.null()),
+    linkStatus: v.union(v.string(), v.null()),
   }), v.null()),
   handler: async (ctx, args) => {
     assertVercelServiceSecret(args.serviceSecret);
     const user = await ctx.db.get(args.userId);
     if (!user) return null;
-    const [credits, activeJob, imageReservations, videoReservations, link, reservedJobs] = await Promise.all([
-      getCreativeCredits(ctx, user._id, args.nowMs), findActiveJob(ctx, user._id),
+    const [credits, imageReservations, videoReservations, link, reservedJobs] = await Promise.all([
+      getCreativeCredits(ctx, user._id, args.nowMs),
       ctx.db.query("creativeUsage").withIndex("by_user_kind_settled", q => q.eq("userId", user._id).eq("kind", "image").eq("settled", false)).collect(),
       ctx.db.query("creativeUsage").withIndex("by_user_kind_settled", q => q.eq("userId", user._id).eq("kind", "video").eq("settled", false)).collect(),
       ctx.db.query("creativeLinkConnections").withIndex("by_user", q => q.eq("userId", user._id)).first(),
       Promise.all(CREATIVE_ACTIVE_STATES.map(state => ctx.db.query("creativeJobs").withIndex("by_user_state", q => q.eq("userId", user._id).eq("state", state)).collect())),
     ]);
+    const [activeImageJob, activeVideoJob] = await Promise.all([
+      credits.activeImageJob ? ctx.db.get(credits.activeImageJob) : null,
+      credits.activeVideoJob ? ctx.db.get(credits.activeVideoJob) : null,
+    ]);
     return { user: await person(ctx, user), imageFreeRemaining: credits.imageFreeRemaining, videoFreeRemaining: credits.videoFreeRemaining,
       creditCents: credits.creditCents, reservedImageCount: imageReservations.length, reservedVideoCount: videoReservations.length,
       reservedCreditCents: reservedJobs.flat().filter(job => job.reservationSource === "credit" && job.fundingStatus === "reserved").reduce((sum, job) => sum + job.reservedCents, 0),
-      activeJob: activeJob ? project("jobs", activeJob) : null, linkStatus: link?.status ?? null };
+      // Retain activeJob for older dashboard clients while exposing the real
+      // independent image and video generation slots.
+      activeJob: activeImageJob ? project("jobs", activeImageJob) : activeVideoJob ? project("jobs", activeVideoJob) : null,
+      activeImageJob: activeImageJob ? project("jobs", activeImageJob) : null,
+      activeVideoJob: activeVideoJob ? project("jobs", activeVideoJob) : null,
+      linkStatus: link?.status ?? null };
   },
 });
 export const threads = query({

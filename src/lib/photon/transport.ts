@@ -55,6 +55,9 @@ export function createCoastInboundHandler(
     );
     const creativeCommands = [...new Set(creativeTokens)];
     const creativeCommand = creativeCommands[0] ?? null;
+    const animateLatestDraw = creativeCommand === "zap" && creativeTokens.length === 1
+      && inboundMessages.every(candidate => (candidate.attachments?.length ?? 0) === 0)
+      && /^\s*\/zap\s+animate(?:\s+this)?\s*$/iu.test(inboundMessages.map(candidate => candidate.text).join("\n"));
     const detectedContent = detectUnsupportedInboundContent(
       inboundMessages,
       creativeCommand !== null,
@@ -90,6 +93,7 @@ export function createCoastInboundHandler(
         : {}),
       ...(creativeCommand ? { creativeCommand } : {}),
       ...(creativeTokens.length > 1 ? { creativeCommandAmbiguous: true as const } : {}),
+      ...(animateLatestDraw ? { animateLatestDraw: true as const } : {}),
     });
     registerPhotonCriticalTask(claimTask);
     const claim = await claimTask;

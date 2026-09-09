@@ -13,6 +13,7 @@ import {
 } from "./locationRequests";
 import { inboundClaimResult } from "./lib/validators";
 import { serviceSecretFingerprintHex } from "./lib/service_auth";
+import { admitCreativeJob, releaseCreativeFunding } from "./lib/creative";
 
 const RAW_TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const BURST_DEBOUNCE_MS = 150;
@@ -189,7 +190,10 @@ export const claimDelivery = internalMutation({
     ),
     creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"))),
     creativeCommandAmbiguous: v.optional(v.boolean()),
+    animateLatestDraw: v.optional(v.boolean()),
     encryptedCreativePayload: v.optional(v.string()),
+    drawLaunchSecretHash: v.optional(v.string()),
+    encryptedDrawLaunchSecret: v.optional(v.string()),
     receivedAtMs: v.number(),
   },
   returns: inboundClaimResult,
@@ -841,6 +845,13 @@ export const claimDelivery = internalMutation({
         requestKey: `${args.webhookId}:${args.providerMessageId}`,
         command: creativeCommand,
         encryptedPayload: args.encryptedCreativePayload,
+        ...(args.animateLatestDraw ? { animateLatestDraw: true } : {}),
+        ...(args.drawLaunchSecretHash && args.encryptedDrawLaunchSecret
+          ? {
+              drawLaunchSecretHash: args.drawLaunchSecretHash,
+              encryptedDrawLaunchSecret: args.encryptedDrawLaunchSecret,
+            }
+          : {}),
         nowMs: args.receivedAtMs,
       });
       if (admitted.state === "busy") {
@@ -871,7 +882,7 @@ export const claimDelivery = internalMutation({
           idempotencyKey: `${turnId}:billing:topup`,
           payload: {
             text,
-            ...(admitted.topupOrderId === undefined ? {} : { orderId: admitted.topupOrderId }),
+            ...(!("topupOrderId" in admitted) || admitted.topupOrderId === undefined ? {} : { orderId: admitted.topupOrderId }),
           },
           status: "pending",
           attemptCount: 0,
@@ -881,7 +892,7 @@ export const claimDelivery = internalMutation({
         });
         await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
       } else {
-        if (creativeCommand === "draw" && "drawSessionId" in admitted && admitted.drawSessionId && admitted.launchSecret) {
+        if (creativeCommand === "draw" && "drawSessionId" in admitted && admitted.drawSessionId && admitted.encryptedLaunchSecret) {
           await insertOwnedDelivery(ctx, {
             turnId,
             threadId,
@@ -889,7 +900,7 @@ export const claimDelivery = internalMutation({
             sequence: 0,
             itemKey: "draw-card",
             idempotencyKey: `${turnId}:draw-card`,
-            payload: { sessionId: admitted.drawSessionId, launchSecret: admitted.launchSecret },
+            payload: { sessionId: admitted.drawSessionId, launchSecretCiphertext: admitted.encryptedLaunchSecret },
             status: "pending",
             attemptCount: 0,
             nextAttemptAtMs: args.receivedAtMs,
@@ -989,27 +1000,12 @@ async function cancelCreativeJobsInline(
     .take(50);
   for (const job of jobs) {
     if (["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state)) continue;
-    if (job.reservationSource === "credit") {
-      await ctx.db.insert("creativeCreditLedger", {
-        userId,
-        jobId: job._id,
-        kind: "release",
-        amountCents: job.reservedCents,
-        idempotencyKey: `${job.reservationId}:cancel-release`,
-        createdAtMs: nowMs,
-      });
-    } else if (job.reservationSource === "free") {
-      const usage = await ctx.db
-        .query("creativeUsage")
-        .withIndex("by_reservation", (q) => q.eq("reservationId", job.reservationId))
-        .unique();
-      if (usage !== null) await ctx.db.delete(usage._id);
-    }
     await ctx.db.patch(job._id, {
       state: "cancelled",
       ...(redact ? { encryptedPayload: "[redacted]" } : {}),
       updatedAtMs: nowMs,
     });
+    await releaseCreativeFunding(ctx, job, nowMs);
   }
 }
 
@@ -1023,27 +1019,36 @@ async function admitCreativeInline(
     requestKey: string;
     command: "imagine" | "zap" | "draw";
     encryptedPayload: string;
+    animateLatestDraw?: boolean;
+    drawLaunchSecretHash?: string;
+    encryptedDrawLaunchSecret?: string;
     nowMs: number;
   },
 ) {
-  const existing = await ctx.db.query("creativeJobs").withIndex("by_request_key", (q) => q.eq("requestKey", args.requestKey)).unique();
-  if (existing !== null) return { state: existing.state };
-  const active = await ctx.db
-    .query("creativeJobs")
-    .withIndex("by_user_state", (q) => q.eq("userId", args.userId))
-    .take(20);
-  if (active.some((job) => !["delivered", "failed", "refused", "cancelled", "expired", "retryable_failure"].includes(job.state))) {
-    return { state: "busy" };
-  }
   if (args.command === "draw") {
-    const launchSecret = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const existingSession = await ctx.db.query("drawSessions").withIndex("by_request_key", q => q.eq("requestKey", args.requestKey)).unique();
+    // Webhook retries reuse the original workspace and encrypted launch
+    // material. The delivery worker decrypts it only while forming the card
+    // URL; ordinary Convex records never receive plaintext launch secrets.
+    if (existingSession) return {
+      state: "admitted",
+      drawSessionId: existingSession._id,
+      encryptedLaunchSecret: existingSession.encryptedLaunchSecret,
+    };
+    // Current Vercel transport passes a ciphertext + SHA-256 verifier. The
+    // fallback only supports legacy callers and is never emitted to a new
+    // outbound record as plaintext.
+    const legacyLaunchSecret = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const launchSecretHash = args.drawLaunchSecretHash ?? serviceSecretFingerprintHex(legacyLaunchSecret);
+    const encryptedLaunchSecret = args.encryptedDrawLaunchSecret ?? serviceSecretFingerprintHex(legacyLaunchSecret);
     const sessionId = await ctx.db.insert("drawSessions", {
       userId: args.userId,
       threadId: args.threadId,
       sourceMessageId: args.sourceMessageId,
       turnId: args.turnId,
-      launchSecretHash: serviceSecretFingerprintHex(launchSecret),
-      encryptedLaunchSecret: serviceSecretFingerprintHex(launchSecret),
+      requestKey: args.requestKey,
+      launchSecretHash,
+      encryptedLaunchSecret,
       launchExpiresAtMs: args.nowMs + 15 * 60_000,
       encryptedPayload: args.encryptedPayload,
       status: "active",
@@ -1051,52 +1056,54 @@ async function admitCreativeInline(
       updatedAtMs: args.nowMs,
       expiresAtMs: args.nowMs + 24 * 60 * 60_000,
     });
-    return { state: "admitted", drawSessionId: sessionId, launchSecret };
+    return { state: "admitted", drawSessionId: sessionId, encryptedLaunchSecret };
   }
-  const kind = args.command === "zap" ? "video" : "image";
-  const price = args.command === "zap" ? 100 : 50;
-  const usage = await ctx.db.query("creativeUsage").withIndex("by_user_kind_admitted", (q) => q.eq("userId", args.userId).eq("kind", kind)).take(100);
-  const free = usage.filter((item) => item.admittedAtMs > args.nowMs - 24 * 60 * 60 * 1_000).length < 10;
-  let source: "free" | "credit" | "payment" = free ? "free" : "payment";
-  if (!free) {
-    const ledger = await ctx.db.query("creativeCreditLedger").withIndex("by_user_created", (q) => q.eq("userId", args.userId)).collect();
-    if (ledger.reduce((sum, item) => sum + item.amountCents, 0) >= price) source = "credit";
-  }
-  const reservationId = `${args.requestKey}:reservation`;
-  const jobId = await ctx.db.insert("creativeJobs", {
-    userId: args.userId,
-    threadId: args.threadId,
-    sourceMessageId: args.sourceMessageId,
-    turnId: args.turnId,
-    requestKey: args.requestKey,
-    command: args.command,
-    state: source === "payment" ? "awaiting_payment" : "admitted",
-    encryptedPayload: args.encryptedPayload,
-    reservationSource: source,
-    reservedCents: source === "free" ? 0 : price,
-    reservationId,
-    createdAtMs: args.nowMs,
-    updatedAtMs: args.nowMs,
-    expiresAtMs: args.nowMs + 24 * 60 * 60 * 1_000,
-  });
-  if (source === "free") await ctx.db.insert("creativeUsage", { userId: args.userId, kind, jobId, reservationId, admittedAtMs: args.nowMs, settled: false });
-  if (source === "credit") await ctx.db.insert("creativeCreditLedger", { userId: args.userId, jobId, kind: "reserve", amountCents: -price, idempotencyKey: reservationId, createdAtMs: args.nowMs });
-  let topupOrderId: string | undefined;
-  if (source === "payment") {
-    topupOrderId = `ct_${args.requestKey.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(-48)}`;
-    await ctx.db.insert("creativeTopups", {
+  try {
+    const latestDrawMediaId = args.command === "zap" && args.animateLatestDraw
+      ? await latestDrawOutputForThread(ctx, args.userId, args.threadId, args.nowMs)
+      : null;
+    const admitted = await admitCreativeJob(ctx, {
+      ...args,
+      ...(latestDrawMediaId ? { inputMediaId: latestDrawMediaId, inputCategory: "result" as const } : {}),
+    });
+    if (admitted.state !== "awaiting_payment") return admitted;
+    const priorOrders = await ctx.db.query("creativeTopups").withIndex("by_user_created", q => q.eq("userId", args.userId)).collect();
+    const previous = priorOrders.find(order => order.savedJobId === admitted.jobId && ["created", "pending"].includes(order.status));
+    const topupOrderId = previous?.orderId ?? `ct_${args.requestKey.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(-48)}`;
+    if (!previous) await ctx.db.insert("creativeTopups", {
       userId: args.userId,
       orderId: topupOrderId,
       paymentPath: "checkout",
       status: "created",
       chargeCents: 999,
       creditCents: 1000,
-      savedJobId: jobId,
+      savedJobId: admitted.jobId,
       createdAtMs: args.nowMs,
       updatedAtMs: args.nowMs,
     });
+    return { ...admitted, topupOrderId };
+  } catch (error) {
+    if (error instanceof Error && error.message === "CREATIVE_JOB_ALREADY_ACTIVE") return { state: "busy" as const };
+    throw error;
   }
-  return { state: source === "payment" ? "awaiting_payment" : "admitted", topupOrderId };
+}
+
+async function latestDrawOutputForThread(
+  ctx: MutationCtx,
+  userId: Id<"coastUsers">,
+  threadId: Id<"coastThreads">,
+  nowMs: number,
+) {
+  const jobs = await ctx.db.query("creativeJobs")
+    .withIndex("by_user_created", q => q.eq("userId", userId))
+    .order("desc")
+    .take(100);
+  for (const job of jobs) {
+    if (job.command !== "draw" || job.threadId !== threadId || !job.outputMediaId || !["ready_for_save", "ready_for_delivery", "delivered"].includes(job.state)) continue;
+    const media = await ctx.db.get(job.outputMediaId);
+    if (media && media.deletedAtMs === undefined && media.expiresAtMs > nowMs) return media._id;
+  }
+  return null;
 }
 
 export const recordAcknowledgement = internalMutation({

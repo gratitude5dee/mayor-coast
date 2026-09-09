@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { put } from "@vercel/blob";
+import { api } from "../../../../../convex/_generated/api";
 
 import {
   buildProviderRequest,
@@ -8,8 +9,10 @@ import {
   type CreativeAttachment,
 } from "@/lib/creative";
 import { parseServerEnv } from "@/lib/env";
+import { getConvexHttpClient } from "@/lib/convex";
 import { decryptCreativePayload } from "@/lib/security/identity";
 import { authorizeInternalRequest, privateJson } from "@/lib/security/internal-auth";
+import { drawProviderMediaUrl } from "@/lib/draw/provider-media";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +25,7 @@ const creativeWorkerRequestSchema = z.object({
   fencingToken: z.number().int().positive(),
   command: z.enum(["imagine", "zap"]),
   encryptedPayload: z.string().min(24).max(90_000),
+  inputMediaId: z.string().min(1).max(128).optional(),
   providerRequestId: z.string().min(1).max(512).optional(),
 }).strict().superRefine((value, context) => {
   if (value.operation === "poll" && !value.providerRequestId) {
@@ -82,6 +86,26 @@ export async function POST(request: Request): Promise<Response> {
         });
       }
     }
+    // A Draw-to-video request carries an opaque media ID through Convex. The
+    // provider gets only a short-lived COAST download URL; explicit iMessage
+    // attachments deliberately keep priority over that saved result.
+    if (attachments.length === 0 && input.inputMediaId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const media = await getConvexHttpClient(parseServerEnv().CONVEX_URL).action((api.service as any).getCreativeProviderInput, {
+        serviceSecret: secret,
+        jobId: input.jobId as never,
+        mediaId: input.inputMediaId as never,
+        nowMs: Date.now(),
+      });
+      if (!media) return privateJson({ error: "draw_result_unavailable" }, { status: 422 });
+      attachments.push({
+        id: `draw-result:${input.inputMediaId}`,
+        kind: "image",
+        mimeType: media.mimeType,
+        byteLength: 0,
+        sourceUrl: drawProviderMediaUrl(new URL(request.url).origin, secret, input.jobId, input.inputMediaId, Date.now()),
+      });
+    }
     const sizeError = validateAttachmentSizes(attachments);
     if (sizeError) return privateJson({ error: sizeError }, { status: 422 });
     if (attachments.some((attachment) => attachment.sourceUrl === undefined)) {
@@ -98,7 +122,12 @@ export async function POST(request: Request): Promise<Response> {
     }
     const parsed = parseCreativeRequest(text, attachments);
     if ("error" in parsed || parsed.command !== input.command) return privateJson({ error: "invalid_creative_payload" }, { status: 422 });
-    const provider = buildProviderRequest({ ...parsed, prompt: await compileCreativePrompt(parsed.prompt, parsed.command) });
+    // The opaque Draw output is already an input attachment. Replace the
+    // literal animation command with useful motion guidance for the provider.
+    const effectivePrompt = input.inputMediaId && parsed.command === "zap" && /^(?:animate(?:\s+this)?)$/iu.test(parsed.prompt.trim())
+      ? "Natural cinematic motion while preserving the original composition."
+      : parsed.prompt;
+    const provider = buildProviderRequest({ ...parsed, prompt: await compileCreativePrompt(effectivePrompt, parsed.command) });
     if (provider.provider === "fal") {
       const providerResult = input.operation === "poll"
         ? await pollFal(provider.model, input.providerRequestId!)

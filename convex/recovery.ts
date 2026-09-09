@@ -2,6 +2,7 @@ import { v } from "convex/values";
 
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import { releaseCreativeFunding } from "./lib/creative";
 
 const RECOVERY_BATCH = 20;
 const CHAT_TTL_BATCH = 50;
@@ -106,22 +107,9 @@ export const recoverStalled = internalMutation({
         .withIndex("by_expiry", (q) => q.eq("state", state).lt("expiresAtMs", nowMs))
         .take(20);
       for (const job of jobs) {
-        if (job.reservationSource === "credit") {
-          await ctx.db.insert("creativeCreditLedger", {
-            userId: job.userId,
-            jobId: job._id,
-            kind: "release",
-            amountCents: job.reservedCents,
-            idempotencyKey: `${job.reservationId}:expiry-release`,
-            createdAtMs: nowMs,
-          });
-        } else if (job.reservationSource === "free") {
-          const usage = await ctx.db
-            .query("creativeUsage")
-            .withIndex("by_reservation", (q) => q.eq("reservationId", job.reservationId))
-            .unique();
-          if (usage !== null) await ctx.db.delete(usage._id);
-        }
+        // This idempotent helper clears the correct image or video slot and
+        // prevents expiry from crediting the same reservation twice.
+        await releaseCreativeFunding(ctx, job, nowMs);
         await ctx.db.patch(job._id, { state: "expired", updatedAtMs: nowMs });
         expiredCreative += 1;
       }

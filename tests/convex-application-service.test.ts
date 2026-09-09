@@ -59,6 +59,41 @@ describe("Convex application privacy boundary", () => {
     expect(JSON.stringify(creativeClaim)).not.toContain("/draw /draw");
   });
 
+  it("encrypts Draw launch material before it crosses into Convex", async () => {
+    const action = vi.fn(async () => ({
+      accepted: false,
+      command: "none",
+      controlReply: null,
+      duplicate: true,
+      messageId: "message-id",
+      shouldAcknowledge: false,
+      shouldStartTyping: false,
+      threadId: "thread-id",
+      turnId: "turn-id",
+      userId: "user-id",
+    }));
+    const service = new ConvexCoastApplicationService({
+      client: { action } as unknown as ConvexHttpClient,
+      identityPepper: "identity-pepper-that-is-long-enough-for-tests",
+      serviceSecret: "internal-service-secret-that-is-long-enough",
+    });
+    await service.claimInbound({
+      deliveryKey: "delivery-key",
+      creativeCommand: "draw",
+      messages: [{ providerMessageId: "draw-message", sentAtMs: 1, text: "/draw" }],
+      providerMessageId: "draw-message",
+      receivedAtMs: 1,
+      senderAddress: "+14155550100",
+      threadId: "imessage:any;-;+14155550100~shared",
+      webhookId: "photon-live-gateway",
+    });
+    const firstCall = action.mock.calls[0] as unknown as [unknown, Record<string, unknown>];
+    const persisted = firstCall[1];
+    expect(persisted.drawLaunchSecretHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(persisted.encryptedDrawLaunchSecret).toMatch(/^v1\./u);
+    expect(JSON.stringify(persisted)).not.toContain("launchSecret\":");
+  });
+
   it("pseudonymizes synthetic poll event ids before persistence", async () => {
     const rawAddress = "+14155550100";
     const rawPollEventId = `poll-guid:${rawAddress}:option-guid:vote`;

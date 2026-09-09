@@ -10,6 +10,9 @@
     },
     "src/app/api/imessage/webhook/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/internal/draw/route.ts": {
+      "maxDuration": 300
     }
   }
 }

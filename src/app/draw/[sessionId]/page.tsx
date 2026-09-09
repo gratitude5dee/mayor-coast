@@ -21,5 +21,7 @@ export const metadata: Metadata = {
 };
 
 export default async function DrawPage({ params }: { params: Promise<{ sessionId: string }> }) {
-  return <DrawStudio sessionId={(await params).sessionId} />;
+  // The adapter is held behind a separate server-side flag and requires a
+  // production license. The custom raster canvas remains the production path.
+  return <DrawStudio sessionId={(await params).sessionId} tldrawEnabled={process.env.COAST_DRAW_TLDRAW_ENABLED === "true" && Boolean(process.env.COAST_DRAW_TLDRAW_LICENSE_KEY)} />;
 }

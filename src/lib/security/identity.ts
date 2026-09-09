@@ -64,6 +64,16 @@ export function encryptCreativePayload(payload: string, secret: string): string 
   return ["v1", iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ciphertext.toString("base64url")].join(".");
 }
 
+/** A launch secret is created only at the Vercel boundary and never persisted plaintext. */
+export function createDrawLaunchSecret(): string {
+  return randomBytes(48).toString("base64url");
+}
+
+/** Matches the portable SHA-256 implementation used by Convex session exchange. */
+export function drawLaunchSecretHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 export function decryptCreativePayload(value: string, secret: string): string {
   const [version, ivValue, tagValue, ciphertextValue, extra] = value.split(".");
   if (version !== "v1" || !ivValue || !tagValue || !ciphertextValue || extra !== undefined) {

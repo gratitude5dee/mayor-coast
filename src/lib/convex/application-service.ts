@@ -11,6 +11,8 @@ import type {
 import {
   encryptCreativePayload,
   encryptThreadReference,
+  createDrawLaunchSecret,
+  drawLaunchSecretHash,
   pseudonymizeOpaqueIdentifier,
   pseudonymizeSender,
 } from "../security/identity";
@@ -62,6 +64,15 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
       ),
       receivedAtMs: input.receivedAtMs,
     };
+    const drawLaunch = input.creativeCommand === "draw"
+      ? (() => {
+          const secret = createDrawLaunchSecret();
+          return {
+            drawLaunchSecretHash: drawLaunchSecretHash(secret),
+            encryptedDrawLaunchSecret: encryptCreativePayload(secret, this.options.serviceSecret),
+          };
+        })()
+      : {};
     const creativeFields = input.creativeCommand
       ? {
           creativeCommand: input.creativeCommand,
@@ -76,6 +87,7 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
             }),
             this.options.serviceSecret,
           ),
+          ...drawLaunch,
         }
       : {};
 
@@ -96,6 +108,7 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
             ...(input.creativeCommand && input.creativeCommandAmbiguous
               ? { creativeCommandAmbiguous: true }
               : {}),
+            ...(input.animateLatestDraw ? { animateLatestDraw: true } : {}),
             text: input.creativeCommand
               ? "[creative request omitted]"
               : input.messages.at(-1)?.text ?? "",

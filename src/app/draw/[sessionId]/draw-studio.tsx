@@ -17,10 +17,12 @@ import {
 } from "@/lib/draw/canvas";
 import { drawLaunchSecret } from "@/lib/draw/launch";
 import type { DrawMode } from "@/lib/draw/provider";
+import { ToolcraftButton } from "./toolcraft-controls";
 
-type Props = { sessionId: string };
-type Job = { id: string; state: string; outputUrl?: string; previewUrl?: string } | null;
+type Props = { sessionId: string; tldrawEnabled?: boolean };
+type Job = { id: string; state: string; outputUrl?: string; previewUrl?: string; errorCode?: string | null } | null;
 type EventItem = { jobId: string; sequence: number; kind: string; state: string; mediaId: string | null; previewIndex: number | null; errorCode: string | null };
+type JobSnapshot = { jobId: string; state: string; previewMediaId: string | null; outputMediaId: string | null; errorCode: string | null } | null;
 
 const colors = ["#17231d", "#b45309", "#dc2626", "#2563eb", "#ffffff"];
 const mediaUrl = (sessionId: string, mediaId: string) => `/api/draw/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`;
@@ -28,13 +30,14 @@ const mediaUrl = (sessionId: string, mediaId: string) => `/api/draw/sessions/${e
 export default function DrawStudio({ sessionId }: Props) {
   const strokeCanvasRef = useRef<HTMLCanvasElement>(null);
   const backgroundCanvasRef = useRef<HTMLCanvasElement>(null);
+  const drawingSurfaceRef = useRef<HTMLElement>(null);
   const pointerRef = useRef<number | null>(null);
+  const touchDrawingRef = useRef(false);
   const currentRef = useRef<DrawPoint[]>([]);
-  const strokesRef = useRef<DrawStroke[]>([]);
-  const redoRef = useRef<DrawStroke[]>([]);
   const lastSequenceRef = useRef(0);
   const requestKeyRef = useRef<string | null>(null);
-  const backgroundUrlRef = useRef<string | null>(null);
+  const preparingRef = useRef(false);
+  const savingRef = useRef(false);
   const [strokes, setStrokes] = useState<DrawStroke[]>([]);
   const [redo, setRedo] = useState<DrawStroke[]>([]);
   const [current, setCurrent] = useState<DrawPoint[]>([]);
@@ -50,31 +53,62 @@ export default function DrawStudio({ sessionId }: Props) {
   const [authorized, setAuthorized] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const preparingRef = useRef(false);
-  const savingRef = useRef(false);
+  const [backgroundKind, setBackgroundKind] = useState<"photo" | "result" | null>(null);
+  const [animating, setAnimating] = useState(false);
 
-  useEffect(() => { strokesRef.current = strokes; }, [strokes]);
-  useEffect(() => { redoRef.current = redo; }, [redo]);
-  useEffect(() => { backgroundUrlRef.current = backgroundUrl; }, [backgroundUrl]);
+  const applyJob = useCallback((next: { id: string; state: string; previewMediaId?: string | null; outputMediaId?: string | null; errorCode?: string | null }) => {
+    setJob((previous) => {
+      const isNew = previous?.id !== next.id;
+      return {
+        id: next.id,
+        state: next.state,
+        ...(isNew ? {} : previous?.previewUrl ? { previewUrl: previous.previewUrl } : {}),
+        ...(isNew ? {} : previous?.outputUrl ? { outputUrl: previous.outputUrl } : {}),
+        ...(next.previewMediaId ? { previewUrl: mediaUrl(sessionId, next.previewMediaId) } : {}),
+        ...(next.outputMediaId ? { outputUrl: mediaUrl(sessionId, next.outputMediaId) } : {}),
+        ...(next.errorCode ? { errorCode: next.errorCode } : {}),
+      };
+    });
+  }, [sessionId]);
 
   const applyEvent = useCallback((event: EventItem) => {
     if (event.sequence <= lastSequenceRef.current) return;
     lastSequenceRef.current = event.sequence;
-    const nextId = event.jobId;
-    setJob((previous) => ({ id: nextId || previous?.id || "", state: event.state, ...(previous?.outputUrl ? { outputUrl: previous.outputUrl } : {}), ...(event.kind === "preview" && event.mediaId ? { previewUrl: mediaUrl(sessionId, event.mediaId) } : {}), ...(event.kind === "completed" && event.mediaId ? { outputUrl: mediaUrl(sessionId, event.mediaId) } : {}) }));
+    applyJob({
+      id: event.jobId,
+      state: event.state,
+      ...(event.kind === "preview" && event.mediaId ? { previewMediaId: event.mediaId } : {}),
+      ...(event.kind === "completed" && event.mediaId ? { outputMediaId: event.mediaId } : {}),
+      errorCode: event.errorCode,
+    });
     if (event.kind === "preview" && event.mediaId) setTab("preview");
-    if (event.kind === "completed" && event.mediaId) { setTab("preview"); setMessage("Image ready. Review it, then tap Save to send it in iMessage."); }
-    else setMessage(drawJobLabel(event.state));
+    if (event.kind === "completed" && event.mediaId) {
+      setTab("preview");
+      setMessage("Image ready. Review it, animate it, or tap Save to send it in iMessage.");
+    } else if (event.errorCode) {
+      setMessage("This request needs attention. You can start a new image when it clears.");
+    } else {
+      setMessage(drawJobLabel(event.state));
+    }
     if (["delivered", "failed", "terminal_failure", "refused", "cancelled", "expired"].includes(event.state)) requestKeyRef.current = null;
-  }, [sessionId]);
+  }, [applyJob]);
+
+  const applySnapshot = useCallback((snapshot: JobSnapshot) => {
+    if (!snapshot) return;
+    applyJob({ id: snapshot.jobId, state: snapshot.state, previewMediaId: snapshot.previewMediaId, outputMediaId: snapshot.outputMediaId, errorCode: snapshot.errorCode });
+    if (snapshot.outputMediaId) {
+      setTab("preview");
+      setMessage(snapshot.state === "ready_for_save" ? "Image ready. Review it, animate it, or tap Save to send it in iMessage." : drawJobLabel(snapshot.state));
+    }
+  }, [applyJob]);
 
   const refreshStatus = useCallback(async () => {
-    const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/status`, { cache: "no-store" });
+    const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/status?after=${lastSequenceRef.current}`, { cache: "no-store" });
     if (!response.ok) return;
-    const body = await response.json() as { events?: EventItem[]; activeJobId?: string | null; latestJobId?: string | null };
+    const body = await response.json() as { events?: EventItem[]; currentJob?: JobSnapshot };
     for (const event of body.events ?? []) applyEvent(event);
-    if (body.activeJobId) setJob((previous) => previous ?? { id: body.activeJobId!, state: "running" });
-  }, [applyEvent, sessionId]);
+    applySnapshot(body.currentJob ?? null);
+  }, [applyEvent, applySnapshot, sessionId]);
 
   useEffect(() => {
     const secret = drawLaunchSecret(window.location.hash);
@@ -84,9 +118,9 @@ export default function DrawStudio({ sessionId }: Props) {
       return fetch(`${endpoint}/exchange`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret }) });
     });
     void request.then((response) => {
-      if (!response.ok) { setMessage(secret ? "This drawing link expired. Send /draw again." : "Open this canvas from its iMessage link."); return; }
+      if (!response.ok) { setMessage(secret ? "This drawing link expired. Send /draw for a fresh link." : "Open this canvas from its iMessage link."); return; }
       setAuthorized(true);
-      if (secret) { try { history.replaceState(null, "", `/draw/${encodeURIComponent(sessionId)}`); } catch { /* constrained Messages webview */ } }
+      if (secret) { try { history.replaceState(null, "", `/draw/${encodeURIComponent(sessionId)}`); } catch { /* Photon webview fallback */ } }
       void refreshStatus();
     }).catch(() => setMessage("COAST Draw could not connect. Try reopening the link."));
   }, [refreshStatus, sessionId]);
@@ -94,151 +128,187 @@ export default function DrawStudio({ sessionId }: Props) {
   useEffect(() => {
     if (!authorized) return;
     const source = new EventSource(`/api/draw/sessions/${encodeURIComponent(sessionId)}/events?after=${lastSequenceRef.current}`);
-    const handle = (event: MessageEvent<string>) => { try { applyEvent(JSON.parse(event.data) as EventItem); } catch { /* ignore malformed keep-alives */ } };
-    source.addEventListener("state", handle); source.addEventListener("preview", handle); source.addEventListener("completed", handle);
+    const handle = (event: MessageEvent<string>) => { try { applyEvent(JSON.parse(event.data) as EventItem); } catch { /* keep SSE alive */ } };
+    const handleError = (event: MessageEvent<string>) => { try { const error = JSON.parse(event.data) as { code?: string }; setMessage(error.code === "session_expired" ? "This drawing link expired. Send /draw for a fresh link." : "Live updates paused. Reconnecting…"); } catch { /* EventSource reconnects itself */ } };
+    source.addEventListener("state", handle); source.addEventListener("preview", handle); source.addEventListener("completed", handle); source.addEventListener("error", handleError);
     const poll = window.setInterval(() => void refreshStatus(), 2_000);
     return () => { source.close(); window.clearInterval(poll); };
   }, [applyEvent, authorized, refreshStatus, sessionId]);
 
+  // Messages WebViews sometimes ignore touch-action during a sheet gesture.
+  // This narrowly-scoped non-passive fallback only owns a gesture that began
+  // on the drawing surface, so toolbar and prompt controls still scroll.
+  useEffect(() => {
+    const node = drawingSurfaceRef.current;
+    if (!node) return;
+    const startTouch = (event: TouchEvent) => {
+      if (node.contains(event.target as Node)) {
+        touchDrawingRef.current = true;
+        event.preventDefault();
+      }
+    };
+    const stop = (event: TouchEvent) => {
+      if (touchDrawingRef.current && node.contains(event.target as Node)) event.preventDefault();
+    };
+    const endTouch = () => { touchDrawingRef.current = false; };
+    node.addEventListener("touchstart", startTouch, { passive: false });
+    node.addEventListener("touchmove", stop, { passive: false });
+    node.addEventListener("touchend", endTouch, { passive: true });
+    node.addEventListener("touchcancel", endTouch, { passive: true });
+    return () => {
+      node.removeEventListener("touchstart", startTouch);
+      node.removeEventListener("touchmove", stop);
+      node.removeEventListener("touchend", endTouch);
+      node.removeEventListener("touchcancel", endTouch);
+    };
+  }, []);
+
+  useEffect(() => {
+    const update = () => document.documentElement.style.setProperty("--coast-draw-vvh", `${window.visualViewport?.height ?? window.innerHeight}px`);
+    update();
+    window.visualViewport?.addEventListener("resize", update);
+    window.addEventListener("resize", update);
+    return () => { window.visualViewport?.removeEventListener("resize", update); window.removeEventListener("resize", update); };
+  }, []);
+
   useEffect(() => {
     const canvas = strokeCanvasRef.current;
     if (!canvas) return;
-    try {
-      canvas.width = DRAW_CANVAS_SIZE; canvas.height = DRAW_CANVAS_SIZE;
-      const context = canvas.getContext("2d");
-      if (!context) return;
-      context.clearRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
-      for (const stroke of strokes) paintStroke(context, stroke);
-      if (current.length > 1) paintStroke(context, { points: current, color, width: size, erase: eraser });
-    } catch { return; }
+    canvas.width = DRAW_CANVAS_SIZE; canvas.height = DRAW_CANVAS_SIZE;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.clearRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
+    for (const stroke of strokes) paintStroke(context, stroke);
+    if (current.length > 1) paintStroke(context, { points: current, color, width: size, erase: eraser });
   }, [color, current, eraser, size, strokes]);
 
   useEffect(() => {
     const canvas = backgroundCanvasRef.current;
     if (!canvas) return;
-    try {
-      canvas.width = DRAW_CANVAS_SIZE; canvas.height = DRAW_CANVAS_SIZE;
-      const context = canvas.getContext("2d");
-      if (!context) return;
-      context.fillStyle = "#ffffff"; context.fillRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
-      if (!backgroundUrl) return;
-      const image = new Image();
-      image.onload = () => {
-        try {
-          if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
-          const fit = containImage(image.naturalWidth, image.naturalHeight);
-          context.drawImage(image, fit.x, fit.y, fit.width, fit.height);
-        } catch { setMessage("The imported image could not be displayed. Try another image."); }
-      };
-      image.src = backgroundUrl;
-    } catch { return; }
+    canvas.width = DRAW_CANVAS_SIZE; canvas.height = DRAW_CANVAS_SIZE;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.fillStyle = "#fff"; context.fillRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
+    if (!backgroundUrl) return;
+    const image = new Image();
+    image.onload = () => {
+      if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+      const fit = containImage(image.naturalWidth, image.naturalHeight);
+      context.drawImage(image, fit.x, fit.y, fit.width, fit.height);
+    };
+    image.onerror = () => setMessage("The selected image could not be displayed. Try another image.");
+    image.src = backgroundUrl;
   }, [backgroundUrl]);
 
   function point(event: React.PointerEvent<HTMLCanvasElement>) { const rect = event.currentTarget.getBoundingClientRect(); return canvasPoint(event.clientX, event.clientY, rect); }
   function start(event: React.PointerEvent<HTMLCanvasElement>) {
-    event.preventDefault();
-    pointerRef.current = event.pointerId;
-    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* constrained WebView fallback */ }
-    const next = [point(event)];
-    currentRef.current = next;
-    setCurrent(next);
+    event.preventDefault(); event.stopPropagation?.(); pointerRef.current = event.pointerId;
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* constrained Photon fallback */ }
+    const next = [point(event)]; currentRef.current = next; setCurrent(next);
   }
   function move(event: React.PointerEvent<HTMLCanvasElement>) {
     if (pointerRef.current !== event.pointerId) return;
-    event.preventDefault();
-    // React clears currentTarget after dispatch. Read coordinates now, never
-    // inside a state updater that React may execute during a later render.
-    const nextPoint = point(event);
-    const value = currentRef.current;
-    const next = value.length >= 4096 ? value : [...value, nextPoint];
-    currentRef.current = next;
-    setCurrent(next);
+    event.preventDefault(); event.stopPropagation?.();
+    const next = currentRef.current.length >= 4096 ? currentRef.current : [...currentRef.current, point(event)];
+    currentRef.current = next; setCurrent(next);
   }
   function end(event?: React.PointerEvent<HTMLCanvasElement>) {
     if (event && pointerRef.current !== event.pointerId) return;
     pointerRef.current = null;
     const stroke = completedStroke(currentRef.current, color, size, eraser);
     if (stroke) setStrokes((value) => [...value, stroke]);
-    setRedo([]);
-    currentRef.current = [];
-    setCurrent([]);
+    setRedo([]); currentRef.current = []; setCurrent([]);
   }
 
   async function importImage(file: File | undefined) {
     if (!file) return;
     if (file.size > DRAW_IMPORT_MAX_BYTES || !["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setMessage("Choose a JPEG, PNG, or WebP under 10 MB."); return; }
-    const reader = new FileReader(); reader.onload = () => { if (typeof reader.result === "string") { setBackgroundUrl(reader.result); setStrokes([]); setRedo([]); setMessage("Image imported. Add a prompt or draw over it."); } }; reader.readAsDataURL(file);
+    const reader = new FileReader();
+    reader.onload = () => { if (typeof reader.result === "string") { setBackgroundUrl(reader.result); setBackgroundKind("photo"); setStrokes([]); setRedo([]); setTab("sketch"); setMessage("Image imported. Add a prompt or draw over it."); } };
+    reader.readAsDataURL(file);
   }
 
   async function generate() {
-    if (preparingRef.current) return;
-    if (!authorized) { setMessage("Open this canvas from the iMessage conversation first."); return; }
-    if (isDrawJobActive(job?.state)) { setMessage(drawJobLabel(job?.state)); return; }
+    if (preparingRef.current || !authorized || isDrawJobActive(job?.state)) return;
     const strokeCanvas = strokeCanvasRef.current; const backgroundCanvas = backgroundCanvasRef.current;
     if (!strokeCanvas || !backgroundCanvas) return;
     const ink = hasVisibleInk(strokeCanvas.getContext("2d")?.getImageData(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE).data ?? new Uint8ClampedArray());
     if (!prompt.trim() && !ink && !backgroundUrl) { setMessage("Add a sketch, import an image, or write a prompt first."); return; }
-    preparingRef.current = true;
-    setPreparing(true);
+    preparingRef.current = true; setPreparing(true); setMessage("Preparing…");
     try {
-    setMessage("Preparing…");
-    const flattened = document.createElement("canvas"); flattened.width = DRAW_CANVAS_SIZE; flattened.height = DRAW_CANVAS_SIZE;
-    const context = flattened.getContext("2d"); if (!context) return;
-    context.fillStyle = "#ffffff"; context.fillRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE); context.drawImage(backgroundCanvas, 0, 0); context.drawImage(strokeCanvas, 0, 0);
-    let mediaId: string | undefined;
-    if (ink || backgroundUrl) {
-      const blob = await new Promise<Blob | null>((resolve) => flattened.toBlob(resolve, "image/png"));
-      if (!blob) { setMessage("The sketch could not be prepared. Try again."); return; }
-      const upload = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/media`, { method: "POST", headers: { "content-type": "image/png" }, body: blob });
-      if (!upload.ok) { setMessage("The image could not be uploaded. Try again."); return; }
-      mediaId = (await upload.json() as { mediaId: string }).mediaId;
-    }
-    const requestKey = requestKeyRef.current ?? crypto.randomUUID(); requestKeyRef.current = requestKey;
-    const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/generations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestKey, prompt: prompt.trim(), ...(mediaId ? { mediaId } : {}), mode }) });
-    if (!response.ok) {
-      const failure = await response.json().catch(() => ({})) as { error?: string };
-      setMessage(response.status === 401 ? "This session expired. Send /draw for a fresh link." : failure.error?.includes("CREATIVE_JOB_ALREADY_ACTIVE") ? "Your previous image is still running. Waiting for its result…" : response.status === 503 ? "COAST Draw is temporarily paused." : "That generation could not start. Try again.");
-      return;
-    }
-    const body = await response.json() as { jobId: string; state: string };
-    setJob({ id: body.jobId, state: body.state }); setMessage(drawJobLabel(body.state));
-    } catch { setMessage("Couldn’t connect to generation. Tap Generate to retry safely."); }
+      const flattened = document.createElement("canvas"); flattened.width = DRAW_CANVAS_SIZE; flattened.height = DRAW_CANVAS_SIZE;
+      const context = flattened.getContext("2d"); if (!context) throw new Error("canvas_unavailable");
+      context.fillStyle = "#fff"; context.fillRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE); context.drawImage(backgroundCanvas, 0, 0); context.drawImage(strokeCanvas, 0, 0);
+      let mediaId: string | undefined;
+      if (ink || backgroundUrl) {
+        const blob = await new Promise<Blob | null>((resolve) => flattened.toBlob(resolve, "image/jpeg", 0.9));
+        if (!blob) throw new Error("canvas_encode_failed");
+        const upload = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/media`, { method: "POST", headers: { "content-type": "image/jpeg" }, body: blob });
+        if (!upload.ok) throw new Error("upload_failed");
+        mediaId = (await upload.json() as { mediaId: string }).mediaId;
+      }
+      const requestKey = requestKeyRef.current ?? crypto.randomUUID(); requestKeyRef.current = requestKey;
+      const category = ink ? "sketch" : backgroundKind ?? "prompt";
+      const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/generations`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestKey, prompt: prompt.trim(), ...(mediaId ? { mediaId } : {}), mode, ...(mediaId ? { inputCategory: category } : {}) }),
+      });
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({})) as { error?: string };
+        setMessage(response.status === 401 ? "This session expired. Send /draw for a fresh link." : failure.error?.includes("CREATIVE_JOB_ALREADY_ACTIVE") ? "Another image is still generating." : failure.error?.includes("awaiting_payment") ? "Add credit in iMessage, then try again." : "That generation could not start. Try again.");
+        return;
+      }
+      const body = await response.json() as { jobId: string; state: string };
+      applyJob({ id: body.jobId, state: body.state }); setMessage(drawJobLabel(body.state));
+    } catch { setMessage("Couldn’t prepare this image. Tap Generate to retry safely."); }
     finally { preparingRef.current = false; setPreparing(false); }
   }
 
-  async function cancel() { if (!job?.id) return; const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/jobs/${encodeURIComponent(job.id)}/cancel`, { method: "POST" }); if (response.ok) setMessage("Cancelled."); else setMessage("This request can no longer be cancelled."); }
+  async function cancel() {
+    if (!job?.id) return;
+    const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/jobs/${encodeURIComponent(job.id)}/cancel`, { method: "POST" });
+    setMessage(response.ok ? "Cancelled." : "This request can no longer be cancelled.");
+  }
   async function save() {
     if (!job?.id || job.state !== "ready_for_save" || savingRef.current) return;
-    savingRef.current = true;
-    setSaving(true);
-    setMessage("Saving to iMessage…");
+    savingRef.current = true; setSaving(true); setMessage("Sending to iMessage…");
     try {
       const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/jobs/${encodeURIComponent(job.id)}/save`, { method: "POST" });
-      if (!response.ok) {
-        setMessage(response.status === 401 ? "This session expired. Send /draw for a fresh link." : "The image is safe here, but it could not be sent yet. Tap Save to retry.");
-        return;
-      }
+      if (!response.ok) { setMessage(response.status === 401 ? "This session expired. Send /draw for a fresh link." : "The image is safe here. Tap Save to retry."); return; }
       const body = await response.json() as { state: string };
-      setJob((currentJob) => currentJob ? { ...currentJob, state: body.state } : currentJob);
-      setMessage(body.state === "delivered" ? "Delivered to iMessage." : "Sending to iMessage…");
-    } catch {
-      setMessage("The image is safe here, but it could not be sent yet. Tap Save to retry.");
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
+      setJob((currentJob) => currentJob ? { ...currentJob, state: body.state } : currentJob); setMessage(body.state === "delivered" ? "Delivered to iMessage." : "Sending to iMessage…");
+    } catch { setMessage("The image is safe here. Tap Save to retry."); }
+    finally { savingRef.current = false; setSaving(false); }
   }
-  function refine() { if (!job?.outputUrl) return; setBackgroundUrl(job.outputUrl); setStrokes([]); setRedo([]); setJob(null); setTab("sketch"); setMessage("Result loaded. Add a prompt or draw a refinement."); }
+  async function animate() {
+    if (!job?.id || !job.outputUrl || animating) return;
+    setAnimating(true); setMessage("Starting a 15-second video…");
+    try {
+      const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/jobs/${encodeURIComponent(job.id)}/animate`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestKey: crypto.randomUUID() }),
+      });
+      if (!response.ok) { setMessage("The image is ready, but that video could not start."); return; }
+      const body = await response.json() as { state: string };
+      setMessage(body.state === "awaiting_payment" ? "Add credit in iMessage to animate this image." : "Video queued. COAST will send it in iMessage when it’s ready.");
+    } catch { setMessage("The image is ready, but that video could not start."); }
+    finally { setAnimating(false); }
+  }
+  function refine() {
+    if (!job?.outputUrl) return;
+    setBackgroundUrl(job.outputUrl); setBackgroundKind("result"); setStrokes([]); setRedo([]); setCurrent([]); setJob(null); requestKeyRef.current = null; setTab("sketch"); setMessage("Result loaded. Add a prompt or draw a refinement.");
+  }
 
-  const readyToSave = job?.state === "ready_for_save" && Boolean(job.outputUrl);
+  const ready = Boolean(job?.outputUrl) && ["ready_for_save", "ready_for_delivery", "delivered"].includes(job?.state ?? "");
   const showingGeneratedImage = tab === "preview" && Boolean(job?.previewUrl || job?.outputUrl);
 
   return <main className="draw-shell">
     <header className="draw-header"><div><p className="eyebrow">COAST DRAW</p><h1>Sketch a move</h1></div><span className="status" aria-live="polite">{drawJobLabel(job?.state)}</span></header>
-    <div className="tabs" role="tablist"><button className={tab === "sketch" ? "active" : ""} onClick={() => setTab("sketch")}>Sketch</button><button className={tab === "preview" ? "active" : ""} onClick={() => setTab("preview")} disabled={!job?.previewUrl && !job?.outputUrl}>Preview</button></div>
-    <section className="viewport"><canvas ref={backgroundCanvasRef} className={showingGeneratedImage ? "hidden" : "layer"} aria-hidden="true" /><canvas ref={strokeCanvasRef} className={showingGeneratedImage ? "hidden" : "layer"} onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} aria-label="COAST drawing canvas" />{showingGeneratedImage ? <img className="preview-image" src={job?.outputUrl ?? job?.previewUrl} alt="COAST generated preview" onError={() => setMessage("The image was generated, but its preview could not load. Reopen the card and try again.")} /> : null}<span className="canvas-hint">1024 × 1024</span></section>
-    <div className="toolbar" aria-label="Drawing tools"><div className="palette">{colors.map((value) => <button key={value} className="swatch" style={{ background: value }} aria-label={`Use ${value}`} onClick={() => { setColor(value); setEraser(false); }} />)}</div><label className="size">Size <input type="range" min="4" max="64" value={size} onChange={(event) => setSize(Number(event.target.value))} /></label><button className={eraser ? "selected" : ""} onClick={() => setEraser((value) => !value)}>Eraser</button><button onClick={() => { const value = strokes.at(-1); if (value) { setRedo((items) => [...items, value]); setStrokes((items) => items.slice(0, -1)); } }} disabled={!strokes.length}>Undo</button><button onClick={() => { const value = redo.at(-1); if (value) { setStrokes((items) => [...items, value]); setRedo((items) => items.slice(0, -1)); } }} disabled={!redo.length}>Redo</button><button onClick={() => { setStrokes([]); setRedo([]); }}>Clear</button><label className="import">Import<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void importImage(event.target.files?.[0])} /></label></div>
-    <section className="bottom-sheet"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe the image (optional)" aria-label="Prompt" /><div className="actions"><div className="mode-toggle" role="group" aria-label="Generation mode"><button className={mode === "fast" ? "active" : ""} onClick={() => setMode("fast")}>Flare Fast</button><button className={mode === "detailed" ? "active" : ""} onClick={() => setMode("detailed")}>Flare Detailed</button><button className={mode === "turbo" ? "active" : ""} onClick={() => setMode("turbo")}>Turbo · 4 steps</button></div>{readyToSave ? <div className="save-actions"><button className="discard" onClick={() => void cancel()}>Discard</button><button className="save" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save to iMessage"}</button></div> : isDrawJobActive(job?.state) ? <button className="cancel" onClick={() => void cancel()}>Cancel</button> : <button className="generate" disabled={preparing || !authorized} onClick={() => void generate()}>{preparing ? "Preparing…" : "Generate"}</button>}</div><p className="message" aria-live="polite">{message}</p>{job?.outputUrl && job.state === "delivered" ? <button className="refine" onClick={refine}>Draw on this result</button> : null}</section>
-    <style jsx>{`*{box-sizing:border-box}.draw-shell{min-height:100dvh;background:#13221b;color:#f8f1df;padding:max(10px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));font-family:ui-sans-serif,system-ui;display:flex;flex-direction:column;gap:8px}.draw-header{display:flex;justify-content:space-between;align-items:center;max-width:720px;width:100%;margin:0 auto}.eyebrow{color:#f4b544;letter-spacing:.16em;font-size:11px;font-weight:800;margin:0 0 2px}h1{font-size:22px;margin:0}.status{font-size:13px;color:#f4b544}.tabs{display:flex;gap:4px;max-width:720px;width:100%;margin:auto}.tabs button,.mode-toggle button{background:transparent;color:#d8d1be;border:0;padding:10px 14px;min-height:44px;border-radius:12px;font-weight:700}.tabs button.active,.mode-toggle button.active{background:#344a3b;color:#fff}.tabs button:disabled{opacity:.35}.viewport{position:relative;width:min(100%,720px);aspect-ratio:1;margin:auto;background:#fff;border-radius:14px;overflow:hidden;touch-action:none;box-shadow:0 8px 30px #0003}.layer,.preview-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.layer{touch-action:none}.hidden{visibility:hidden}.preview-image{z-index:3}.canvas-hint{position:absolute;right:10px;bottom:8px;color:#777;background:#fff9;border-radius:8px;padding:3px 6px;font-size:10px;z-index:4}.toolbar{display:flex;align-items:center;gap:6px;max-width:720px;width:100%;margin:auto;overflow-x:auto;padding:2px 0}.toolbar button,.import{border:0;background:#344a3b;color:#f8f1df;border-radius:10px;min-height:44px;padding:8px 11px;white-space:nowrap;font-weight:650}.toolbar button:disabled{opacity:.35}.toolbar .selected{outline:2px solid #f4b544}.palette{display:flex;gap:5px}.swatch{width:32px!important;padding:0!important;border:2px solid #f8f1df!important;border-radius:50%!important}.size{display:flex;align-items:center;gap:4px;color:#f5d998;font-size:12px;white-space:nowrap}.size input{width:72px}.import{position:relative;cursor:pointer}.import input{position:absolute;inset:0;opacity:0;width:100%;height:100%}.bottom-sheet{max-width:720px;width:100%;margin:auto;background:#1d3025;border:1px solid #3d5548;border-radius:16px;padding:8px}.bottom-sheet textarea{width:100%;min-height:52px;max-height:110px;resize:vertical;border:1px solid #526357;background:#25352b;color:#fff;border-radius:10px;padding:10px;font:inherit}.actions{display:flex;gap:8px;margin-top:8px;align-items:stretch}.mode-toggle{display:flex;background:#13221b;border-radius:12px}.generate,.cancel,.save,.discard{flex:1;border:0;border-radius:11px;min-height:44px;font-size:16px;font-weight:800}.generate,.save{background:#f4b544;color:#13221b}.cancel,.discard{background:#7e4638;color:#fff}.save-actions{display:flex;gap:6px;flex:1}.save{white-space:nowrap}.discard{flex:0 0 auto;font-size:13px}.message{font-size:12px;color:#d8d1be;margin:7px 2px 0;min-height:16px}.refine{width:100%;border:0;background:#f4b544;color:#13221b;border-radius:10px;min-height:42px;font-weight:800}@media(max-width:560px){.actions{flex-direction:column}.mode-toggle{width:100%;overflow-x:auto}.mode-toggle button{flex:1;white-space:nowrap}.save-actions{width:100%}}@media(min-width:760px){.draw-shell{padding:18px}.toolbar{justify-content:center}.bottom-sheet{padding:12px}}`}</style>
+    <nav className="tabs" role="tablist"><ToolcraftButton className={tab === "sketch" ? "active" : ""} onClick={() => setTab("sketch")}>Sketch</ToolcraftButton><ToolcraftButton className={tab === "preview" ? "active" : ""} onClick={() => setTab("preview")} disabled={!job?.previewUrl && !job?.outputUrl}>Preview</ToolcraftButton></nav>
+    <div className="toolbar" aria-label="Drawing tools"><div className="palette">{colors.map((value) => <ToolcraftButton key={value} className={`swatch ${color === value && !eraser ? "selected" : ""}`} style={{ background: value }} aria-label={`Use ${value}`} onClick={() => { setColor(value); setEraser(false); }} />)}</div><label className="size">Size <input type="range" min="4" max="64" value={size} onChange={(event) => setSize(Number(event.target.value))} /></label><ToolcraftButton className={eraser ? "selected" : ""} onClick={() => setEraser((value) => !value)}>Eraser</ToolcraftButton><ToolcraftButton onClick={() => { const stroke = strokes.at(-1); if (stroke) { setRedo((items) => [...items, stroke]); setStrokes((items) => items.slice(0, -1)); } }} disabled={!strokes.length}>Undo</ToolcraftButton><ToolcraftButton onClick={() => { const stroke = redo.at(-1); if (stroke) { setStrokes((items) => [...items, stroke]); setRedo((items) => items.slice(0, -1)); } }} disabled={!redo.length}>Redo</ToolcraftButton><ToolcraftButton onClick={() => { setStrokes([]); setRedo([]); }}>Clear</ToolcraftButton><label className="import">Import<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void importImage(event.target.files?.[0])} /></label></div>
+    <section className="canvas-zone" ref={drawingSurfaceRef}><div className="viewport"><canvas ref={backgroundCanvasRef} className={showingGeneratedImage ? "hidden layer" : "layer"} aria-hidden="true" /><canvas ref={strokeCanvasRef} className={showingGeneratedImage ? "hidden layer" : "layer"} onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} onContextMenu={(event) => event.preventDefault()} aria-label="COAST drawing canvas" />{showingGeneratedImage ? <img className="preview-image" src={job?.outputUrl ?? job?.previewUrl} alt="COAST generated preview" draggable={false} onError={() => setMessage("The image was generated, but its preview could not load. Reopen the card and try again.")} /> : null}<span className="canvas-hint">1024 × 1024</span></div></section>
+    <section className="bottom-sheet"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe the image (optional)" aria-label="Prompt" /><div className="mode-toggle" role="group" aria-label="Generation mode"><button className={mode === "fast" ? "active" : ""} onClick={() => setMode("fast")}>Flare Fast</button><button className={mode === "detailed" ? "active" : ""} onClick={() => setMode("detailed")}>Flare Detailed</button><button className={mode === "turbo" ? "active" : ""} onClick={() => setMode("turbo")}>Turbo · 4 steps</button><button className={mode === "hq" ? "active" : ""} onClick={() => setMode("hq")}>Sunburst HQ</button></div><div className="actions">{ready ? <><button className="discard" onClick={() => void cancel()}>Discard</button><button className="secondary" disabled={animating} onClick={() => void animate()}>{animating ? "Starting…" : "Animate"}</button><button className="save" disabled={saving || job?.state !== "ready_for_save"} onClick={() => void save()}>{saving ? "Saving…" : "Save to iMessage"}</button></> : isDrawJobActive(job?.state) ? <button className="cancel" onClick={() => void cancel()}>Cancel</button> : <button className="generate" disabled={preparing || !authorized} onClick={() => void generate()}>{preparing ? "Preparing…" : "Generate"}</button>}</div><p className="message" aria-live="polite">{message}</p>{ready ? <button className="refine" onClick={refine}>Draw on this result</button> : null}</section>
+    <style jsx>{`
+      :global(html),:global(body){height:100%;margin:0;overscroll-behavior:none;background:#13221b}
+      *{box-sizing:border-box}.draw-shell{height:var(--coast-draw-vvh,100dvh);overflow:hidden;overscroll-behavior:none;background:#13221b;color:#f8f1df;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));font-family:ui-sans-serif,system-ui;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;gap:7px}.draw-header,.tabs,.toolbar,.bottom-sheet{width:min(100%,720px);margin:0 auto}.draw-header{display:flex;justify-content:space-between;align-items:center}.eyebrow{color:#f4b544;letter-spacing:.16em;font-size:10px;font-weight:850;margin:0 0 2px}h1{font-size:22px;line-height:1.05;margin:0}.status{font-size:12px;color:#f4b544;text-align:right}.tabs{display:flex;gap:4px}.tabs button,.mode-toggle button{background:transparent;color:#d8d1be;border:0;padding:9px 13px;min-height:44px;border-radius:12px;font-weight:750}.tabs button.active,.mode-toggle button.active{background:#344a3b;color:#fff}.tabs button:disabled{opacity:.35}.toolbar{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:1px 0}.toolbar button,.import{border:0;background:#344a3b;color:#f8f1df;border-radius:10px;min-height:44px;padding:8px 11px;white-space:nowrap;font-weight:700}.toolbar button:disabled{opacity:.35}.toolbar .selected{outline:2px solid #f4b544}.palette{display:flex;gap:5px}.swatch{width:34px!important;padding:0!important;border:2px solid #f8f1df!important;border-radius:50%!important;flex:0 0 34px}.size{display:flex;align-items:center;gap:4px;color:#f5d998;font-size:12px;white-space:nowrap}.size input{width:72px}.import{position:relative;cursor:pointer}.import input{position:absolute;inset:0;opacity:0;width:100%;height:100%}.canvas-zone{min-height:0;display:grid;place-items:center;overscroll-behavior:contain;touch-action:none}.viewport{position:relative;max-width:100%;max-height:100%;height:min(100%,720px);aspect-ratio:1;background:#fff;border-radius:14px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 8px 30px #0003}.layer,.preview-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;touch-action:none;user-select:none;-webkit-user-drag:none}.hidden{visibility:hidden}.preview-image{z-index:3}.canvas-hint{position:absolute;right:9px;bottom:7px;color:#777;background:#fff9;border-radius:7px;padding:3px 6px;font-size:10px;z-index:4}.bottom-sheet{max-height:min(34dvh,250px);overflow:auto;background:#1d3025;border:1px solid #3d5548;border-radius:16px;padding:8px;overscroll-behavior:contain}.bottom-sheet textarea{width:100%;min-height:48px;max-height:96px;resize:vertical;border:1px solid #526357;background:#25352b;color:#fff;border-radius:10px;padding:9px;font:inherit}.mode-toggle{display:flex;background:#13221b;border-radius:12px;overflow-x:auto;margin-top:7px}.mode-toggle button{white-space:nowrap;flex:1;font-size:12px;padding-inline:9px}.actions{display:flex;gap:6px;margin-top:7px}.generate,.cancel,.save,.discard,.secondary{border:0;border-radius:11px;min-height:44px;font-size:14px;font-weight:850}.generate,.save{background:#f4b544;color:#13221b;flex:1}.cancel,.discard{background:#7e4638;color:#fff;padding:0 13px}.secondary{background:#344a3b;color:#f8f1df;padding:0 12px}.save:disabled{opacity:.55}.message{font-size:12px;color:#d8d1be;margin:6px 2px 0;min-height:15px}.refine{width:100%;border:0;background:#f4b544;color:#13221b;border-radius:10px;min-height:40px;font-weight:850;margin-top:6px}@media(max-height:680px){.draw-shell{gap:4px}.toolbar button,.import{min-height:40px}.bottom-sheet{max-height:205px}.bottom-sheet textarea{min-height:40px}.mode-toggle button{min-height:38px}.draw-header h1{font-size:19px}}@media(min-width:760px){.draw-shell{padding:16px}.toolbar{justify-content:center}.bottom-sheet{padding:12px;max-height:270px}}`}</style>
   </main>;
 }

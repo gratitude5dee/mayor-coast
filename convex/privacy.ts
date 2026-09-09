@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
 import { cancelActiveCheckInsForUser } from "./checkIns";
+import { releaseCreativeFunding } from "./lib/creative";
 
 const BATCH_SIZE = 100;
 
@@ -132,6 +133,7 @@ export const eraseUserBatch = internalMutation({
     for (const job of creativeJobs) {
       if (!["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state)) {
         await ctx.db.patch(job._id, { state: "cancelled", encryptedPayload: "[redacted]", updatedAtMs: nowMs });
+        await releaseCreativeFunding(ctx, job, nowMs);
       } else if (job.encryptedPayload !== "[redacted]") {
         await ctx.db.patch(job._id, { encryptedPayload: "[redacted]", updatedAtMs: nowMs });
       }
@@ -140,7 +142,13 @@ export const eraseUserBatch = internalMutation({
         .withIndex("by_job", (q) => q.eq("jobId", job._id))
         .take(BATCH_SIZE);
       for (const item of media) {
-        await ctx.db.delete(item._id);
+        // Keep a private deletion manifest until physical Blob removal is
+        // confirmed. User-facing records have already been redacted.
+        await ctx.db.patch(item._id, {
+          expiresAtMs: nowMs,
+          deletionState: "pending",
+          deletionLeaseUntilMs: undefined,
+        });
         processed += 1;
       }
       processed += 1;

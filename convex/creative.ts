@@ -5,12 +5,12 @@ import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { serviceSecretFingerprintHex } from "./lib/service_auth";
-import { admitCreativeJob, getCreativeCredits, releaseCreativeFunding } from "./lib/creative";
+import { CREATIVE_ACTIVE_STATES, admitCreativeJob, appendCreativeLedger, creativeKind, getCreativeCredits, releaseCreativeFunding, settleCreativeFunding } from "./lib/creative";
 import { creativePollDelayMs } from "../src/lib/creative";
 
 const jobCommand = v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"));
 const reservationSource = v.union(v.literal("free"), v.literal("credit"), v.literal("payment"));
-const drawMode = v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"));
+const drawMode = v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"), v.literal("hq"));
 
 async function nextDrawEventSequence(ctx: MutationCtx, sessionId: Id<"drawSessions">): Promise<number> {
   const session = await ctx.db.get(sessionId);
@@ -27,8 +27,48 @@ async function nextDrawEventSequence(ctx: MutationCtx, sessionId: Id<"drawSessio
 
 export const getCredits = internalQuery({
   args: { userId: v.id("coastUsers"), nowMs: v.number() },
-  returns: v.object({ imageFreeRemaining: v.number(), videoFreeRemaining: v.number(), creditCents: v.number(), activeJob: v.boolean() }),
+  returns: v.object({ imageFreeRemaining: v.number(), videoFreeRemaining: v.number(), creditCents: v.number(), activeJob: v.boolean(), activeImageJob: v.union(v.id("creativeJobs"), v.null()), activeVideoJob: v.union(v.id("creativeJobs"), v.null()) }),
   handler: (ctx, args) => getCreativeCredits(ctx, args.userId, args.nowMs),
+});
+
+// Additive migration for accounts created before image/video slots existed.
+// The scheduled cursor keeps each transaction bounded and relies only on
+// verified live jobs, so it cannot alter settled balances or reservations.
+export const backfillActiveSlots = internalMutation({
+  args: { cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ cursor: v.string(), isDone: v.boolean(), scanned: v.number(), updated: v.number() }),
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("creativeCreditAccounts").paginate({ numItems: 50, cursor: args.cursor });
+    let updated = 0;
+    for (const account of page.page) {
+      const liveByState = await Promise.all(
+        CREATIVE_ACTIVE_STATES.map((state) => ctx.db.query("creativeJobs")
+          .withIndex("by_user_state", (q) => q.eq("userId", account.userId).eq("state", state))
+          .collect()),
+      );
+      const live = liveByState.flat().sort((left, right) => right.createdAtMs - left.createdAtMs);
+      const image = live.find((job) => creativeKind(job.command) === "image");
+      const video = live.find((job) => creativeKind(job.command) === "video");
+      const patch = {
+        activeImageJobId: image?._id,
+        activeVideoJobId: video?._id,
+        // Legacy readers receive the newest live work while all new admission
+        // checks use the two specific slots above.
+        activeJobId: live[0]?._id,
+        updatedAtMs: Date.now(),
+      };
+      if (
+        account.activeImageJobId !== patch.activeImageJobId ||
+        account.activeVideoJobId !== patch.activeVideoJobId ||
+        account.activeJobId !== patch.activeJobId
+      ) {
+        await ctx.db.patch(account._id, patch);
+        updated += 1;
+      }
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.creative.backfillActiveSlots, { cursor: page.continueCursor });
+    return { cursor: page.continueCursor, isDone: page.isDone, scanned: page.page.length, updated };
+  },
 });
 
 export const admit = internalMutation({
@@ -56,17 +96,40 @@ export const addTopupCredit = internalMutation({
     const existingEvent = await ctx.db.query("creativePaymentEvents").withIndex("by_event", (q) => q.eq("eventId", args.eventId)).first();
     if (existing !== null || existingEvent !== null) return false;
     await ctx.db.insert("creativePaymentEvents", { userId: order.userId, eventId: args.eventId, paymentIdentity: args.paymentIdentity, orderId: args.orderId, createdAtMs: args.nowMs });
-    await ctx.db.insert("creativeCreditLedger", { userId: order.userId, topupOrderId: args.orderId, kind: "topup", amountCents: 1_000, idempotencyKey: `topup:${args.orderId}`, createdAtMs: args.nowMs });
-    const account = await ctx.db.query("creativeCreditAccounts").withIndex("by_user", (q) => q.eq("userId", order.userId)).unique();
-    if (account === null) await ctx.db.insert("creativeCreditAccounts", { userId: order.userId, balanceCents: 1_000, updatedAtMs: args.nowMs });
-    else await ctx.db.patch(account._id, { balanceCents: account.balanceCents + 1_000, updatedAtMs: args.nowMs });
+    await appendCreativeLedger(ctx, {
+      userId: order.userId,
+      topupOrderId: args.orderId,
+      kind: "topup",
+      amountCents: 1_000,
+      idempotencyKey: `topup:${args.orderId}`,
+      createdAtMs: args.nowMs,
+    });
     await ctx.db.patch(order._id, { status: "succeeded", updatedAtMs: args.nowMs });
     if (order.savedJobId !== undefined) {
       const job = await ctx.db.get(order.savedJobId);
       if (job?.state === "awaiting_payment") {
-        await ctx.db.patch(job._id, { state: "admitted", reservationSource: "credit", reservedCents: job.command === "imagine" ? 50 : 100, updatedAtMs: args.nowMs });
-        await ctx.db.insert("creativeCreditLedger", { userId: order.userId, jobId: job._id, kind: "reserve", amountCents: job.command === "imagine" ? -50 : -100, idempotencyKey: `${job.reservationId}:payment`, createdAtMs: args.nowMs });
-        await ctx.scheduler.runAfter(0, internal.creative.run, { jobId: job._id });
+        // Payment resumption uses the same transaction as every other
+        // creative request. This rechecks status, rolling allowance, balance,
+        // cancellation, expiry, and the command's image/video slot.
+        const resumed = await admitCreativeJob(ctx, {
+          userId: job.userId,
+          threadId: job.threadId,
+          sourceMessageId: job.sourceMessageId,
+          turnId: job.turnId,
+          requestKey: job.requestKey,
+          command: job.command,
+          encryptedPayload: job.encryptedPayload,
+          nowMs: args.nowMs,
+          resumeJobId: job._id,
+          ...(job.drawSessionId ? { drawSessionId: job.drawSessionId } : {}),
+          ...(job.drawMode ? { drawMode: job.drawMode } : {}),
+          ...(job.revisionKey ? { revisionKey: job.revisionKey } : {}),
+          ...(job.inputMediaId ? { inputMediaId: job.inputMediaId } : {}),
+          ...(job.inputCategory ? { inputCategory: job.inputCategory } : {}),
+        });
+        if (resumed.state === "admitted") {
+          await ctx.scheduler.runAfter(0, internal.creative.run, { jobId: resumed.jobId });
+        }
       }
     }
     return true;
@@ -124,6 +187,19 @@ export const getDrawMediaIdentity = internalQuery({
   },
 });
 
+// This is deliberately narrower than browser media access: Fal receives a
+// short-lived signed URL that can read only the input attached to its current
+// Draw job. The route still verifies cancellation, job identity, and expiry.
+export const getCreativeProviderInput = internalQuery({
+  args: { jobId: v.id("creativeJobs"), mediaId: v.id("creativeMedia"), nowMs: v.number() },
+  returns: v.union(v.object({ sourceUrl: v.string(), mimeType: v.string() }), v.null()),
+  handler: async (ctx, args) => {
+    const [job, media] = await Promise.all([ctx.db.get(args.jobId), ctx.db.get(args.mediaId)]);
+    if (!job || !media || job.inputMediaId !== media._id || media.deletedAtMs !== undefined || media.expiresAtMs <= args.nowMs || ["cancelled", "failed", "refused", "expired"].includes(job.state)) return null;
+    return { sourceUrl: media.sourceUrl, mimeType: media.mimeType };
+  },
+});
+
 export const exchangeDrawSession = internalMutation({
   args: { sessionId: v.id("drawSessions"), launchSecret: v.string(), nowMs: v.number() },
   returns: v.union(v.object({ browserToken: v.string(), expiresAtMs: v.number() }), v.null()),
@@ -153,17 +229,17 @@ export const createDrawMedia = internalMutation({
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
     if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) return null;
-    return await ctx.db.insert("creativeMedia", { drawSessionId: session._id, userId: session.userId, threadId: session.threadId, role: "input", sourceUrl: args.sourceUrl, mimeType: args.mimeType, filename: args.filename, byteLength: args.byteLength, width: args.width, height: args.height, createdAtMs: args.nowMs, expiresAtMs: Math.min(session.expiresAtMs, args.nowMs + 24 * 60 * 60_000) });
+    return await ctx.db.insert("creativeMedia", { drawSessionId: session._id, userId: session.userId, threadId: session.threadId, role: "input", sourceUrl: args.sourceUrl, mimeType: args.mimeType, filename: args.filename, byteLength: args.byteLength, width: args.width, height: args.height, createdAtMs: args.nowMs, expiresAtMs: Math.min(session.expiresAtMs, args.nowMs + 24 * 60 * 60_000), deletionState: "pending" });
   },
 });
 
 export const admitDrawGeneration = internalMutation({
-  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: drawMode, inputMediaId: v.optional(v.id("creativeMedia")), nowMs: v.number() },
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: drawMode, inputMediaId: v.optional(v.id("creativeMedia")), inputCategory: v.optional(v.union(v.literal("prompt"), v.literal("sketch"), v.literal("photo"), v.literal("result"))), nowMs: v.number() },
   returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
     if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) throw new Error("DRAW_SESSION_INVALID");
-    const result = await admitCreativeJob(ctx, { userId: session.userId, threadId: session.threadId, sourceMessageId: session.sourceMessageId, turnId: session.turnId, requestKey: args.requestKey, command: "draw", encryptedPayload: args.encryptedPayload, nowMs: args.nowMs, drawSessionId: session._id, drawMode: args.mode, ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}), revisionKey: args.requestKey });
+    const result = await admitCreativeJob(ctx, { userId: session.userId, threadId: session.threadId, sourceMessageId: session.sourceMessageId, turnId: session.turnId, requestKey: args.requestKey, command: "draw", encryptedPayload: args.encryptedPayload, nowMs: args.nowMs, drawSessionId: session._id, drawMode: args.mode, ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}), ...(args.inputCategory ? { inputCategory: args.inputCategory } : {}), revisionKey: args.requestKey });
     const sequence = await nextDrawEventSequence(ctx, session._id);
     await ctx.db.patch(session._id, { activeJobId: result.jobId, latestJobId: result.jobId, updatedAtMs: args.nowMs });
     await ctx.db.insert("drawEvents", { sessionId: session._id, jobId: result.jobId, sequence, kind: "state", state: result.state, createdAtMs: args.nowMs });
@@ -172,20 +248,56 @@ export const admitDrawGeneration = internalMutation({
   },
 });
 
+export const animateDrawJob = internalMutation({
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), jobId: v.id("creativeJobs"), requestKey: v.string(), encryptedPayload: v.string(), nowMs: v.number() },
+  returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
+  handler: async (ctx, args) => {
+    const [session, drawJob] = await Promise.all([ctx.db.get(args.sessionId), ctx.db.get(args.jobId)]);
+    if (!session || !drawJob || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs || drawJob.drawSessionId !== session._id || !["ready_for_save", "ready_for_delivery", "delivered"].includes(drawJob.state) || !drawJob.outputMediaId) throw new Error("DRAW_RESULT_UNAVAILABLE");
+    const output = await ctx.db.get(drawJob.outputMediaId);
+    if (!output || output.deletedAtMs !== undefined || output.expiresAtMs <= args.nowMs) throw new Error("DRAW_RESULT_UNAVAILABLE");
+    const result = await admitCreativeJob(ctx, {
+      userId: session.userId,
+      threadId: session.threadId,
+      sourceMessageId: session.sourceMessageId,
+      turnId: session.turnId,
+      requestKey: args.requestKey,
+      command: "zap",
+      encryptedPayload: args.encryptedPayload,
+      inputMediaId: output._id,
+      inputCategory: "result",
+      nowMs: args.nowMs,
+    });
+    if (result.state === "admitted") await ctx.scheduler.runAfter(0, internal.creative.run, { jobId: result.jobId });
+    return result;
+  },
+});
+
 export const listDrawEvents = internalQuery({
   args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), afterSequence: v.optional(v.number()), nowMs: v.number() },
-  returns: v.union(v.object({ events: v.array(v.object({ jobId: v.id("creativeJobs"), sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()), errorCode: v.union(v.string(), v.null()) })), latest: v.union(v.number(), v.null()), activeJobId: v.union(v.id("creativeJobs"), v.null()), latestJobId: v.union(v.id("creativeJobs"), v.null()), initialMediaId: v.union(v.id("creativeMedia"), v.null()) }), v.null()),
+  returns: v.union(v.object({ events: v.array(v.object({ jobId: v.id("creativeJobs"), sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()), errorCode: v.union(v.string(), v.null()) })), latest: v.union(v.number(), v.null()), activeJobId: v.union(v.id("creativeJobs"), v.null()), latestJobId: v.union(v.id("creativeJobs"), v.null()), initialMediaId: v.union(v.id("creativeMedia"), v.null()), currentJob: v.union(v.object({ jobId: v.id("creativeJobs"), state: v.string(), previewMediaId: v.union(v.id("creativeMedia"), v.null()), outputMediaId: v.union(v.id("creativeMedia"), v.null()), errorCode: v.union(v.string(), v.null()) }), v.null()) }), v.null()),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
     if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) return null;
     const events = await ctx.db.query("drawEvents").withIndex("by_session_created", q => q.eq("sessionId", args.sessionId)).collect();
     const filtered = events.filter(item => item.sequence > (args.afterSequence ?? -1)).sort((a,b) => a.sequence-b.sequence).slice(0, 50);
+    const latestJob = session.latestJobId ? await ctx.db.get(session.latestJobId) : null;
+    const latestPreview = latestJob
+      ? events.filter(item => item.jobId === latestJob._id && item.kind === "preview" && item.mediaId).sort((a, b) => b.sequence - a.sequence)[0]
+      : undefined;
     return {
       events: filtered.map(item => ({ jobId: item.jobId, sequence: item.sequence, kind: item.kind, state: item.state, mediaId: item.mediaId ?? null, previewIndex: item.previewIndex ?? null, errorCode: item.errorCode ?? null })),
       latest: events.length ? Math.max(...events.map(item => item.sequence)) : null,
       activeJobId: session.activeJobId ?? null,
       latestJobId: session.latestJobId ?? null,
       initialMediaId: session.initialMediaId ?? null,
+      currentJob: latestJob ? {
+        jobId: latestJob._id,
+        state: latestJob.state,
+        previewMediaId: latestPreview?.mediaId ?? null,
+        outputMediaId: latestJob.outputMediaId ?? null,
+        errorCode: latestJob.lastErrorCode ?? null,
+      } : null,
     };
   },
 });
@@ -200,11 +312,31 @@ export const claimExpiredMedia = internalMutation({
       .take(20);
     const result = [] as Array<{ mediaId: Id<"creativeMedia">; sourceUrl: string }>;
     for (const media of expired) {
-      if (media.deletedAtMs !== undefined) continue;
-      await ctx.db.patch(media._id, { deletedAtMs: args.nowMs });
+      if (media.deletedAtMs !== undefined || media.deletionState === "deleted") continue;
+      if (media.deletionState === "deleting" && (media.deletionLeaseUntilMs ?? 0) > args.nowMs) continue;
+      await ctx.db.patch(media._id, {
+        deletionState: "deleting",
+        deletionLeaseUntilMs: args.nowMs + 5 * 60_000,
+        deletionAttempts: (media.deletionAttempts ?? 0) + 1,
+      });
       result.push({ mediaId: media._id, sourceUrl: media.sourceUrl });
     }
     return result;
+  },
+});
+
+export const acknowledgeMediaDeletion = internalMutation({
+  args: { mediaIds: v.array(v.id("creativeMedia")), success: v.boolean(), nowMs: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    for (const mediaId of args.mediaIds) {
+      const media = await ctx.db.get(mediaId);
+      if (!media || media.deletionState !== "deleting") continue;
+      await ctx.db.patch(mediaId, args.success
+        ? { deletionState: "deleted", deletedAtMs: args.nowMs, deletionLeaseUntilMs: undefined }
+        : { deletionState: "pending", deletionLeaseUntilMs: undefined });
+    }
+    return null;
   },
 });
 
@@ -212,16 +344,22 @@ export const cleanupExpiredMedia = internalAction({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
-    const expired = await ctx.runMutation(internal.creative.claimExpiredMedia, { nowMs: Date.now() });
     const cleanupUrl = process.env.COAST_CREATIVE_CLEANUP_URL;
     const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
-    if (!cleanupUrl || !secret || expired.length === 0) return null;
-    await fetch(cleanupUrl, {
-      method: "POST",
-      headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
-      body: JSON.stringify({ urls: expired.map((item) => item.sourceUrl) }),
-      signal: AbortSignal.timeout(10_000),
-    });
+    if (!cleanupUrl || !secret) return null;
+    const expired = await ctx.runMutation(internal.creative.claimExpiredMedia, { nowMs: Date.now() });
+    if (expired.length === 0) return null;
+    try {
+      const response = await fetch(cleanupUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+        body: JSON.stringify({ urls: expired.map((item) => item.sourceUrl) }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      await ctx.runMutation(internal.creative.acknowledgeMediaDeletion, { mediaIds: expired.map(item => item.mediaId), success: response.ok, nowMs: Date.now() });
+    } catch {
+      await ctx.runMutation(internal.creative.acknowledgeMediaDeletion, { mediaIds: expired.map(item => item.mediaId), success: false, nowMs: Date.now() });
+    }
     return null;
   },
 });
@@ -232,7 +370,10 @@ export const cancelUserJobs = internalMutation({
   handler: async (ctx, args) => {
     const jobs = await ctx.db.query("creativeJobs").withIndex("by_user_state", (q) => q.eq("userId", args.userId)).take(50);
     for (const job of jobs) {
-      if (!["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state)) await ctx.db.patch(job._id, { state: "cancelled", updatedAtMs: args.nowMs });
+      if (!["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state)) {
+        await ctx.db.patch(job._id, { state: "cancelled", updatedAtMs: args.nowMs });
+        await releaseCreativeFunding(ctx, job, args.nowMs);
+      }
     }
     return null;
   },
@@ -240,7 +381,7 @@ export const cancelUserJobs = internalMutation({
 
 export const claimForProcessing = internalMutation({
   args: { jobId: v.id("creativeJobs"), nowMs: v.number() },
-  returns: v.union(v.object({ jobId: v.id("creativeJobs"), command: jobCommand, encryptedPayload: v.string(), encryptedThreadRef: v.string(), attemptId: v.string(), fencingToken: v.number() }), v.null()),
+  returns: v.union(v.object({ jobId: v.id("creativeJobs"), command: jobCommand, encryptedPayload: v.string(), encryptedThreadRef: v.string(), attemptId: v.string(), fencingToken: v.number(), inputMediaId: v.union(v.id("creativeMedia"), v.null()) }), v.null()),
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
     if (job === null || job.state !== "admitted") return null;
@@ -249,7 +390,7 @@ export const claimForProcessing = internalMutation({
     const attemptId = `${job._id}:${args.nowMs}`;
     const fencingToken = (job.fencingToken ?? 0) + 1;
     await ctx.db.patch(job._id, { state: "submitting", leaseToken: attemptId, attemptId, fencingToken, leaseExpiresAtMs: args.nowMs + 60_000, updatedAtMs: args.nowMs });
-    return { jobId: job._id, command: job.command, encryptedPayload: job.encryptedPayload, encryptedThreadRef: thread.encryptedProviderThreadRef, attemptId, fencingToken };
+    return { jobId: job._id, command: job.command, encryptedPayload: job.encryptedPayload, encryptedThreadRef: thread.encryptedProviderThreadRef, attemptId, fencingToken, inputMediaId: job.inputMediaId ?? null };
   },
 });
 
@@ -260,22 +401,24 @@ const processingOwnership = {
 };
 
 export const recordDrawSubmission = internalMutation({
-  args: { ...processingOwnership, providerRequestId: v.string(), providerModel: v.string(), nowMs: v.number() },
+  args: { ...processingOwnership, providerRequestId: v.string(), providerModel: v.string(), state: v.optional(v.union(v.literal("queued"), v.literal("running"))), nowMs: v.number() },
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
     if (!job || job.command !== "draw" || job.state !== "submitting" || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken) return false;
     const sequence = job.drawSessionId ? await nextDrawEventSequence(ctx, job.drawSessionId) : (job.eventSequence ?? 0) + 1;
     await ctx.db.patch(job._id, {
-      state: "running",
+      state: args.state ?? "running",
       providerRequestId: args.providerRequestId,
       providerModel: args.providerModel,
       submittedAtMs: args.nowMs,
+      firstStateAtMs: job.firstStateAtMs ?? args.nowMs,
       heartbeatAtMs: args.nowMs,
       eventSequence: sequence,
       updatedAtMs: args.nowMs,
     });
-    if (job.drawSessionId) await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "state", state: "running", createdAtMs: args.nowMs });
+    if (job.drawSessionId) await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "state", state: args.state ?? "running", createdAtMs: args.nowMs });
+    if ((args.state ?? "running") === "queued") await ctx.scheduler.runAfter(0, internal.creative.poll, { jobId: job._id });
     return true;
   },
 });
@@ -433,7 +576,19 @@ export const recordProviderProgress = internalMutation({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
     if (!job || !["queued", "running", "retryable_failure"].includes(job.state) || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken || !job.providerRequestId) return false;
-    await ctx.db.patch(job._id, { state: args.state, heartbeatAtMs: args.nowMs, lastErrorCode: undefined, updatedAtMs: args.nowMs });
+    let eventSequence = job.eventSequence;
+    if (job.command === "draw" && job.drawSessionId) {
+      eventSequence = await nextDrawEventSequence(ctx, job.drawSessionId);
+      await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence: eventSequence, kind: "state", state: args.state, createdAtMs: args.nowMs });
+    }
+    await ctx.db.patch(job._id, {
+      state: args.state,
+      ...(eventSequence === undefined ? {} : { eventSequence }),
+      firstStateAtMs: job.firstStateAtMs ?? args.nowMs,
+      heartbeatAtMs: args.nowMs,
+      lastErrorCode: undefined,
+      updatedAtMs: args.nowMs,
+    });
     const elapsedMs = Math.max(0, args.nowMs - (job.submittedAtMs ?? job.createdAtMs));
     await ctx.scheduler.runAfter(creativePollDelayMs(job.command, elapsedMs), internal.creative.poll, { jobId: job._id });
     return true;
@@ -455,6 +610,7 @@ export const completeProcessing = internalMutation({
       filename: args.filename,
       createdAtMs: args.nowMs,
       expiresAtMs: args.nowMs + 24 * 60 * 60 * 1_000,
+      deletionState: "pending",
     });
     if (job.command === "draw") {
       if (!job.drawSessionId) throw new Error("DRAW_SESSION_MISSING");
@@ -465,10 +621,15 @@ export const completeProcessing = internalMutation({
         const preview = await ctx.db.get(event.mediaId);
         if (preview && preview.expiresAtMs > retireAtMs) await ctx.db.patch(preview._id, { expiresAtMs: retireAtMs });
       }
+      const finalizingSequence = await nextDrawEventSequence(ctx, job.drawSessionId);
+      await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence: finalizingSequence, kind: "state", state: "finalizing", createdAtMs: args.nowMs });
       const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
       await ctx.db.patch(job._id, { state: "ready_for_save", outputMediaId: mediaId, completedAtMs: args.nowMs, eventSequence: sequence, updatedAtMs: args.nowMs });
       await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "completed", state: "ready_for_save", mediaId, createdAtMs: args.nowMs });
       await ctx.db.patch(job.drawSessionId, { latestJobId: job._id, updatedAtMs: args.nowMs });
+      // The customer consumes one image only when the private final artifact
+      // is safely available in Draw. Save merely delivers that same artifact.
+      await settleCreativeFunding(ctx, job, args.nowMs);
       return null;
     }
     const delivery = await insertOwnedDelivery(ctx, {
@@ -688,7 +849,14 @@ export const run = internalAction({
       return null;
     }
     try {
-      const requestBody = { jobId: claim.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, command: claim.command, encryptedPayload: claim.encryptedPayload, ...(claim.command === "draw" ? {} : { operation: "submit" as const }) };
+      const requestBody = {
+        jobId: claim.jobId,
+        attemptId: claim.attemptId,
+        fencingToken: claim.fencingToken,
+        command: claim.command,
+        encryptedPayload: claim.encryptedPayload,
+        ...(claim.command === "draw" ? {} : { operation: "submit" as const, ...(claim.inputMediaId ? { inputMediaId: claim.inputMediaId } : {}) }),
+      };
       const response = await fetch(runtimeUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify(requestBody), signal: AbortSignal.timeout(claim.command === "draw" ? 270_000 : 30_000) });
       if (!response.ok) {
         const failure = await runtimeFailure(response, false);
@@ -718,7 +886,7 @@ export const poll = internalAction({
     if (!claim) return null;
     const runtimeUrl = claim.command === "draw" ? process.env.COAST_DRAW_RUNTIME_URL : process.env.COAST_CREATIVE_RUNTIME_URL;
     const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
-    if (!runtimeUrl || !secret || claim.command === "draw") return null;
+    if (!runtimeUrl || !secret) return null;
     try {
       const response = await fetch(runtimeUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ operation: "poll", jobId: claim.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, command: claim.command, encryptedPayload: claim.encryptedPayload, providerRequestId: claim.providerRequestId }), signal: AbortSignal.timeout(90_000) });
       if (!response.ok) {
@@ -769,7 +937,7 @@ export const providerCanary = internalAction({
 });
 
 export const drawProviderCanary = internalAction({
-  args: { kind: v.union(v.literal("generate"), v.literal("edit")) },
+  args: { kind: v.union(v.literal("generate"), v.literal("edit")), mode: v.optional(drawMode) },
   returns: v.object({ status: v.string(), model: v.string(), partials: v.number(), hasRequestId: v.boolean(), errorCode: v.string() }),
   handler: async (_ctx, args) => {
     const runtimeUrl = process.env.COAST_DRAW_RUNTIME_URL;
@@ -779,7 +947,7 @@ export const drawProviderCanary = internalAction({
       const response = await fetch(runtimeUrl, {
         method: "POST",
         headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
-        body: JSON.stringify({ operation: "canary", kind: args.kind }),
+        body: JSON.stringify({ operation: "canary", kind: args.kind, ...(args.mode ? { mode: args.mode } : {}) }),
         signal: AbortSignal.timeout(270_000),
       });
       const body = await response.json() as { status?: unknown; model?: unknown; partials?: unknown; hasRequestId?: unknown; error?: unknown; code?: unknown; details?: unknown };

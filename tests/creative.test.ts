@@ -20,7 +20,7 @@ import {
   falRequestUrl,
 } from "../src/app/api/internal/creative/route";
 import { completedStroke } from "../src/lib/draw/canvas";
-import { DEFAULT_DRAW_MODEL, drawImageSettings, drawStreamEvent } from "../src/lib/draw/provider";
+import { DEFAULT_DRAW_MODEL, SUNBURST_DRAW_MODEL, drawImageSettings, drawStreamEvent, turboDrawInput } from "../src/lib/draw/provider";
 import { drawLaunchSecret, drawSessionCookie } from "../src/lib/draw/launch";
 import { resolveMiniApp } from "@photon-ai/chat-adapter-imessage";
 
@@ -90,10 +90,13 @@ describe("creative commands and credits", () => {
     expect(creativeLatencyReward("imagine", 21_000)).toBe(0);
   });
 
-  it("pins fast and detailed Draw to Flare with durable stream event handling", () => {
+  it("centralizes Draw modes and durable stream event handling", () => {
     expect(DEFAULT_DRAW_MODEL).toBe("gpt-image-2.5-flare");
     expect(drawImageSettings("fast")).toMatchObject({ quality: "low", outputFormat: "jpeg", outputCompression: 85, partialImages: 2 });
     expect(drawImageSettings("detailed")).toMatchObject({ quality: "medium", outputFormat: "jpeg", outputCompression: 92, partialImages: 2 });
+    expect(drawImageSettings("hq")).toMatchObject({ model: SUNBURST_DRAW_MODEL, quality: "high", outputFormat: "jpeg", outputCompression: 92, partialImages: 2 });
+    expect(turboDrawInput("finish this sketch", "https://coast.example/sketch.jpg", "sketch")).toMatchObject({ image_size: "square_hd", num_inference_steps: 4, num_images: 1, enable_safety_checker: true, output_format: "jpeg", strength: 0.9 });
+    expect(turboDrawInput("refine this photo", "https://coast.example/photo.jpg", "photo")).toMatchObject({ strength: 0.6 });
     expect(drawStreamEvent({ type: "image_edit.partial_image", b64_json: "preview", partial_image_index: 1 })).toMatchObject({ kind: "preview", index: 1 });
     expect(drawStreamEvent({ type: "image_generation.completed", b64_json: "final" })).toEqual({ kind: "completed", base64: "final" });
     expect(drawStreamEvent({ type: "image_generation.partial_image", b64_json: "preview" })).not.toMatchObject({ kind: "completed" });

@@ -2,11 +2,17 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 
 export const CREATIVE_DAY_MS = 86_400_000;
-export const CREATIVE_ACTIVE_STATES = ["staging", "awaiting_payment", "admitted", "submitting", "submission_unknown", "queued", "running", "ready_for_save", "ready_for_delivery", "retryable_failure"] as const;
+// A slot represents ownership of provider work, never ownership of an already
+// generated artifact or its delivery. That distinction lets a user save a Draw
+// result while starting an independent video.
+export const CREATIVE_ACTIVE_STATES = ["staging", "awaiting_payment", "admitted", "submitting", "submission_unknown", "queued", "running", "retryable_failure"] as const;
 export type CreativeCommand = "imagine" | "zap" | "draw";
 export function creativeKind(command: CreativeCommand) { return command === "zap" ? "video" as const : "image" as const; }
 export function creativePrice(command: CreativeCommand) { return command === "zap" ? 100 : 50; }
 export function isCreativeActive(job: Doc<"creativeJobs">) { return (CREATIVE_ACTIVE_STATES as readonly string[]).includes(job.state); }
+type CreativeSlot = "image" | "video";
+function slotFor(command: CreativeCommand): CreativeSlot { return creativeKind(command); }
+function slotField(slot: CreativeSlot) { return slot === "image" ? "activeImageJobId" as const : "activeVideoJobId" as const; }
 
 // Both recent successful jobs and every unresolved reservation occupy a slot.
 // Query by the rolling boundary instead of truncating a user's lifetime history.
@@ -26,8 +32,19 @@ export async function getCreativeCredits(ctx: QueryCtx | MutationCtx, userId: Id
     const ledger = await ctx.db.query("creativeCreditLedger").withIndex("by_user_created", q => q.eq("userId", userId)).collect();
     creditCents = ledger.reduce((sum, entry) => sum + entry.amountCents, 0);
   }
-  const active = await findActiveJob(ctx, userId, account?.activeJobId);
-  return { imageFreeRemaining: Math.max(0, 10 - images), videoFreeRemaining: Math.max(0, 10 - videos), creditCents, activeJob: active !== null };
+  const [activeImageJob, activeVideoJob] = await Promise.all([
+    findActiveJobForSlot(ctx, userId, account, "image"),
+    findActiveJobForSlot(ctx, userId, account, "video"),
+  ]);
+  return {
+    imageFreeRemaining: Math.max(0, 10 - images),
+    videoFreeRemaining: Math.max(0, 10 - videos),
+    creditCents,
+    // Preserve this aggregate for callers released before slots existed.
+    activeJob: activeImageJob !== null || activeVideoJob !== null,
+    activeImageJob: activeImageJob?._id ?? null,
+    activeVideoJob: activeVideoJob?._id ?? null,
+  };
 }
 
 export async function findActiveJob(ctx: QueryCtx | MutationCtx, userId: Id<"coastUsers">, activeJobId?: Id<"creativeJobs">) {
@@ -38,6 +55,31 @@ export async function findActiveJob(ctx: QueryCtx | MutationCtx, userId: Id<"coa
   // Compatibility for jobs admitted before the account lock was introduced.
   for (const state of CREATIVE_ACTIVE_STATES) {
     const job = await ctx.db.query("creativeJobs").withIndex("by_user_state", q => q.eq("userId", userId).eq("state", state)).first();
+    if (job) return job;
+  }
+  return null;
+}
+
+async function findActiveJobForSlot(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"coastUsers">,
+  account: Doc<"creativeCreditAccounts"> | null,
+  slot: CreativeSlot,
+) {
+  const candidates = [account?.[slotField(slot)], account?.activeJobId].filter(
+    (id): id is Id<"creativeJobs"> => id !== undefined,
+  );
+  for (const id of candidates) {
+    const job = await ctx.db.get(id);
+    if (job && creativeKind(job.command) === slot && isCreativeActive(job)) return job;
+  }
+  // Compatibility for legacy accounts and interrupted backfills. This scans
+  // indexed states rather than truncating a user's complete job history.
+  for (const state of CREATIVE_ACTIVE_STATES) {
+    const jobs = await ctx.db.query("creativeJobs")
+      .withIndex("by_user_state", q => q.eq("userId", userId).eq("state", state))
+      .collect();
+    const job = jobs.find(item => creativeKind(item.command) === slot);
     if (job) return job;
   }
   return null;
@@ -68,7 +110,7 @@ export async function appendCreativeLedger(ctx: MutationCtx, args: { userId: Id<
   return true;
 }
 
-type AdmissionArgs = { userId: Id<"coastUsers">; threadId: Id<"coastThreads">; sourceMessageId: Id<"coastMessages">; turnId: Id<"coastTurns">; requestKey: string; command: CreativeCommand; encryptedPayload: string; nowMs: number; drawSessionId?: Id<"drawSessions">; drawMode?: "fast" | "detailed" | "turbo"; revisionKey?: string; inputMediaId?: Id<"creativeMedia">; resumeJobId?: Id<"creativeJobs"> };
+type AdmissionArgs = { userId: Id<"coastUsers">; threadId: Id<"coastThreads">; sourceMessageId: Id<"coastMessages">; turnId: Id<"coastTurns">; requestKey: string; command: CreativeCommand; encryptedPayload: string; nowMs: number; drawSessionId?: Id<"drawSessions">; drawMode?: "fast" | "detailed" | "turbo" | "hq"; revisionKey?: string; inputMediaId?: Id<"creativeMedia">; inputCategory?: "prompt" | "sketch" | "photo" | "result"; resumeJobId?: Id<"creativeJobs"> };
 export type AdmissionResult = { jobId: Id<"creativeJobs">; state: string; source: "free" | "credit" | "payment"; amountCents: number };
 export async function admitCreativeJob(ctx: MutationCtx, args: AdmissionArgs): Promise<AdmissionResult> {
   const user = await ctx.db.get(args.userId);
@@ -77,7 +119,7 @@ export async function admitCreativeJob(ctx: MutationCtx, args: AdmissionArgs): P
   if (existing && existing._id !== args.resumeJobId) return { jobId: existing._id, state: existing.state, source: existing.reservationSource, amountCents: existing.reservedCents };
   if (args.resumeJobId && (!existing || existing.state !== "awaiting_payment" || existing.expiresAtMs <= args.nowMs)) throw new Error("CREATIVE_RESUME_INVALID");
   const account = await reconcileCreativeAccount(ctx, args.userId, args.nowMs);
-  const active = await findActiveJob(ctx, args.userId, account.activeJobId);
+  const active = await findActiveJobForSlot(ctx, args.userId, account, slotFor(args.command));
   if (active && active._id !== args.resumeJobId) throw new Error("CREATIVE_JOB_ALREADY_ACTIVE");
   const free = await occupiedSlots(ctx, args.userId, creativeKind(args.command), args.nowMs) < 10;
   const price = creativePrice(args.command);
@@ -94,10 +136,21 @@ export async function admitCreativeJob(ctx: MutationCtx, args: AdmissionArgs): P
     ...fields, ...(args.command === "draw" ? { provider: args.drawMode === "turbo" ? "fal" as const : "openai" as const } : {}),
     ...(args.drawSessionId ? { drawSessionId: args.drawSessionId } : {}), ...(args.revisionKey ? { revisionKey: args.revisionKey } : {}),
     ...(args.drawMode ? { drawMode: args.drawMode } : {}),
-    ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}), createdAtMs: args.nowMs, expiresAtMs: args.nowMs + CREATIVE_DAY_MS,
+    ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}),
+    ...(args.inputCategory ? { inputCategory: args.inputCategory } : {}),
+    admittedAtMs: args.nowMs,
+    createdAtMs: args.nowMs, expiresAtMs: args.nowMs + CREATIVE_DAY_MS,
   });
   if (existing) await ctx.db.patch(jobId, fields);
-  await ctx.db.patch(account._id, { activeJobId: jobId, updatedAtMs: args.nowMs });
+  // A request waiting for payment is deliberately not a generation lock. It
+  // may coexist with independently-funded work in either media slot.
+  if (state === "admitted") {
+    await ctx.db.patch(account._id, {
+      activeJobId: jobId,
+      [slotField(slotFor(args.command))]: jobId,
+      updatedAtMs: args.nowMs,
+    });
+  }
   if (source === "free") {
     const usage = await ctx.db.query("creativeUsage").withIndex("by_reservation", q => q.eq("reservationId", reservationId)).unique();
     if (!usage) await ctx.db.insert("creativeUsage", { userId: args.userId, kind: creativeKind(args.command), jobId, reservationId, admittedAtMs: args.nowMs, settled: false });
@@ -107,7 +160,14 @@ export async function admitCreativeJob(ctx: MutationCtx, args: AdmissionArgs): P
 
 async function unlock(ctx: MutationCtx, job: Doc<"creativeJobs">, nowMs: number) {
   const account = await reconcileCreativeAccount(ctx, job.userId, nowMs);
-  if (account.activeJobId === job._id) await ctx.db.patch(account._id, { activeJobId: undefined, updatedAtMs: nowMs });
+  const field = slotField(slotFor(job.command));
+  if (account.activeJobId === job._id || account[field] === job._id) {
+    await ctx.db.patch(account._id, {
+      ...(account.activeJobId === job._id ? { activeJobId: undefined } : {}),
+      ...(account[field] === job._id ? { [field]: undefined } : {}),
+      updatedAtMs: nowMs,
+    });
+  }
   if (job.drawSessionId) {
     const session = await ctx.db.get(job.drawSessionId);
     if (session?.activeJobId === job._id) await ctx.db.patch(session._id, { activeJobId: undefined, updatedAtMs: nowMs });

@@ -68,7 +68,10 @@ export const claimInbound = action({
     ),
     creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"))),
     creativeCommandAmbiguous: v.optional(v.boolean()),
+    animateLatestDraw: v.optional(v.boolean()),
     encryptedCreativePayload: v.optional(v.string()),
+    drawLaunchSecretHash: v.optional(v.string()),
+    encryptedDrawLaunchSecret: v.optional(v.string()),
   },
   returns: inboundClaimResult,
   handler: async (ctx, args): Promise<InboundClaim> => {
@@ -88,11 +91,18 @@ export const claimInbound = action({
         ? {
             creativeCommand: args.creativeCommand,
             encryptedCreativePayload: args.encryptedCreativePayload,
+            ...(args.drawLaunchSecretHash && args.encryptedDrawLaunchSecret
+              ? {
+                  drawLaunchSecretHash: args.drawLaunchSecretHash,
+                  encryptedDrawLaunchSecret: args.encryptedDrawLaunchSecret,
+                }
+              : {}),
           }
         : {}),
       ...(args.creativeCommand && args.creativeCommandAmbiguous
         ? { creativeCommandAmbiguous: true }
         : {}),
+      ...(args.animateLatestDraw ? { animateLatestDraw: true } : {}),
       receivedAtMs: args.receivedAtMs,
     });
   },
@@ -114,7 +124,7 @@ export const getDrawSession: any = action({
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const admitDrawGeneration: any = action({
-  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo")), inputMediaId: v.optional(v.id("creativeMedia")), nowMs: v.number() },
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"), v.literal("hq")), inputMediaId: v.optional(v.id("creativeMedia")), inputCategory: v.optional(v.union(v.literal("prompt"), v.literal("sketch"), v.literal("photo"), v.literal("result"))), nowMs: v.number() },
   returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
   handler: async (ctx, args) => {
     assertServiceSecret(args.serviceSecret);
@@ -126,6 +136,7 @@ export const admitDrawGeneration: any = action({
       prompt: args.prompt,
       mode: args.mode,
       ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}),
+      ...(args.inputCategory ? { inputCategory: args.inputCategory } : {}),
       nowMs: args.nowMs,
     });
   },
@@ -134,7 +145,7 @@ export const admitDrawGeneration: any = action({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const listDrawEvents: any = action({
   args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), afterSequence: v.optional(v.number()), nowMs: v.number() },
-  returns: v.union(v.object({ events: v.array(v.object({ jobId: v.id("creativeJobs"), sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()), errorCode: v.union(v.string(), v.null()) })), latest: v.union(v.number(), v.null()), activeJobId: v.union(v.id("creativeJobs"), v.null()), latestJobId: v.union(v.id("creativeJobs"), v.null()), initialMediaId: v.union(v.id("creativeMedia"), v.null()) }), v.null()),
+  returns: v.union(v.object({ events: v.array(v.object({ jobId: v.id("creativeJobs"), sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()), errorCode: v.union(v.string(), v.null()) })), latest: v.union(v.number(), v.null()), activeJobId: v.union(v.id("creativeJobs"), v.null()), latestJobId: v.union(v.id("creativeJobs"), v.null()), initialMediaId: v.union(v.id("creativeMedia"), v.null()), currentJob: v.union(v.object({ jobId: v.id("creativeJobs"), state: v.string(), previewMediaId: v.union(v.id("creativeMedia"), v.null()), outputMediaId: v.union(v.id("creativeMedia"), v.null()), errorCode: v.union(v.string(), v.null()) }), v.null()) }), v.null()),
   handler: async (ctx, args) => {
     assertServiceSecret(args.serviceSecret);
     return await ctx.runQuery(internal.creative.listDrawEvents, {
@@ -148,11 +159,11 @@ export const listDrawEvents: any = action({
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const recordDrawSubmission: any = action({
-  args: { serviceSecret: v.string(), jobId: v.id("creativeJobs"), attemptId: v.string(), fencingToken: v.number(), providerRequestId: v.string(), providerModel: v.string(), nowMs: v.number() },
+  args: { serviceSecret: v.string(), jobId: v.id("creativeJobs"), attemptId: v.string(), fencingToken: v.number(), providerRequestId: v.string(), providerModel: v.string(), state: v.optional(v.union(v.literal("queued"), v.literal("running"))), nowMs: v.number() },
   returns: v.boolean(),
   handler: async (ctx, args) => {
     assertServiceSecret(args.serviceSecret);
-    return await ctx.runMutation(internal.creative.recordDrawSubmission, { jobId: args.jobId, attemptId: args.attemptId, fencingToken: args.fencingToken, providerRequestId: args.providerRequestId, providerModel: args.providerModel, nowMs: args.nowMs });
+    return await ctx.runMutation(internal.creative.recordDrawSubmission, { jobId: args.jobId, attemptId: args.attemptId, fencingToken: args.fencingToken, providerRequestId: args.providerRequestId, providerModel: args.providerModel, ...(args.state ? { state: args.state } : {}), nowMs: args.nowMs });
   },
 });
 
@@ -190,7 +201,7 @@ export const saveDrawJob: any = action({
 // used by Draw without creating a customer job or touching customer balances.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const drawProviderCanary: any = action({
-  args: { serviceSecret: v.string(), kind: v.union(v.literal("generate"), v.literal("edit")) },
+  args: { serviceSecret: v.string(), kind: v.union(v.literal("generate"), v.literal("edit")), mode: v.optional(v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"), v.literal("hq"))) },
   returns: v.object({ status: v.string(), model: v.string(), partials: v.number(), hasRequestId: v.boolean(), errorCode: v.string() }),
   handler: async (_ctx, args) => {
     assertServiceSecret(args.serviceSecret);
@@ -200,7 +211,7 @@ export const drawProviderCanary: any = action({
     const response = await fetch(runtimeUrl, {
       method: "POST",
       headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
-      body: JSON.stringify({ operation: "canary", kind: args.kind }),
+      body: JSON.stringify({ operation: "canary", kind: args.kind, ...(args.mode ? { mode: args.mode } : {}) }),
       signal: AbortSignal.timeout(270_000),
     });
     const body = await response.json() as { status?: unknown; model?: unknown; partials?: unknown; hasRequestId?: unknown; error?: unknown; code?: unknown; details?: unknown };
@@ -230,6 +241,29 @@ export const createDrawMedia: any = action({
       width: args.width,
       height: args.height,
       nowMs: args.nowMs,
+    });
+  },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const getCreativeProviderInput: any = action({
+  args: { serviceSecret: v.string(), jobId: v.id("creativeJobs"), mediaId: v.id("creativeMedia"), nowMs: v.number() },
+  returns: v.union(v.object({ sourceUrl: v.string(), mimeType: v.string() }), v.null()),
+  handler: async (ctx, args) => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runQuery(internal.creative.getCreativeProviderInput, { jobId: args.jobId, mediaId: args.mediaId, nowMs: args.nowMs });
+  },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const animateDrawJob: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), jobId: v.id("creativeJobs"), requestKey: v.string(), encryptedPayload: v.string(), nowMs: v.number() },
+  returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
+  handler: async (ctx, args) => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runMutation(internal.creative.animateDrawJob, {
+      sessionId: args.sessionId, browserTokenHash: args.browserTokenHash, jobId: args.jobId,
+      requestKey: args.requestKey, encryptedPayload: args.encryptedPayload, nowMs: args.nowMs,
     });
   },
 });

@@ -23,6 +23,7 @@ import {
 } from "@/lib/security/internal-auth";
 import {
   constantTimeStringEqual,
+  decryptCreativePayload,
   decryptThreadReference,
 } from "@/lib/security/identity";
 
@@ -96,7 +97,13 @@ export async function POST(request: Request): Promise<Response> {
       providerMessageId = (await adapter.postMessage(threadId, text)).id;
     } else if (input.stage === "draw_card") {
       const sessionId = z.string().min(1).max(128).parse(input.payload.sessionId);
-      const launchSecret = z.string().min(20).max(256).parse(input.payload.launchSecret);
+      // Modern cards carry only encrypted launch material through Convex.
+      // Plain launchSecret remains a narrowly-scoped compatibility path for
+      // already queued legacy delivery records.
+      const launchSecret = typeof input.payload.launchSecretCiphertext === "string"
+        ? decryptCreativePayload(input.payload.launchSecretCiphertext, env.convexServiceSecret)
+        : z.string().min(20).max(256).parse(input.payload.launchSecret);
+      if (launchSecret.length < 20 || launchSecret.length > 256) throw new Error("DRAW_LAUNCH_SECRET_INVALID");
       const publicBase = env.COAST_PUBLIC_URL ?? new URL(request.url).origin;
       const cardUrl = new URL(`/draw/${encodeURIComponent(sessionId)}`, publicBase);
       cardUrl.hash = `secret=${encodeURIComponent(launchSecret)}`;

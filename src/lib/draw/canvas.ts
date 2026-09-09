@@ -69,7 +69,7 @@ export function hasVisibleInk(data: Uint8ClampedArray): boolean {
 }
 
 export function isDrawJobActive(state: string | undefined): boolean {
-  return state !== undefined && !new Set(["delivered", "terminal_failure", "refused", "cancelled", "expired"]).has(state);
+  return state !== undefined && !new Set(["ready_for_save", "ready_for_delivery", "delivered", "failed", "terminal_failure", "refused", "cancelled", "expired"]).has(state);
 }
 
 export function drawJobLabel(state: string | undefined): string {
@@ -80,8 +80,10 @@ export function drawJobLabel(state: string | undefined): string {
     case "submitting":
     case "submission_intent":
     case "submitted":
-    case "queued":
+      return "Preparing";
+    case "queued": return "Queued";
     case "running": return "Generating";
+    case "finalizing": return "Finalizing";
     case "ready_for_save": return "Image ready";
     case "ready_for_delivery":
     case "ready":

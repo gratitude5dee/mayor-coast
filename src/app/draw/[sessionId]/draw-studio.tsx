@@ -29,6 +29,7 @@ export default function DrawStudio({ sessionId }: Props) {
   const strokeCanvasRef = useRef<HTMLCanvasElement>(null);
   const backgroundCanvasRef = useRef<HTMLCanvasElement>(null);
   const pointerRef = useRef<number | null>(null);
+  const currentRef = useRef<DrawPoint[]>([]);
   const strokesRef = useRef<DrawStroke[]>([]);
   const redoRef = useRef<DrawStroke[]>([]);
   const lastSequenceRef = useRef(0);
@@ -68,8 +69,8 @@ export default function DrawStudio({ sessionId }: Props) {
     if (!response.ok) return;
     const body = await response.json() as { events?: EventItem[]; activeJobId?: string | null; latestJobId?: string | null };
     for (const event of body.events ?? []) applyEvent(event);
-    if (body.activeJobId && !job) setJob({ id: body.activeJobId, state: "running" });
-  }, [applyEvent, job, sessionId]);
+    if (body.activeJobId) setJob((previous) => previous ?? { id: body.activeJobId!, state: "running" });
+  }, [applyEvent, sessionId]);
 
   useEffect(() => {
     const secret = drawLaunchSecret(window.location.hash);
@@ -97,31 +98,64 @@ export default function DrawStudio({ sessionId }: Props) {
   useEffect(() => {
     const canvas = strokeCanvasRef.current;
     if (!canvas) return;
-    canvas.width = DRAW_CANVAS_SIZE; canvas.height = DRAW_CANVAS_SIZE;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.clearRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
-    for (const stroke of strokes) paintStroke(context, stroke);
-    if (current.length > 1) paintStroke(context, { points: current, color, width: size, erase: eraser });
+    try {
+      canvas.width = DRAW_CANVAS_SIZE; canvas.height = DRAW_CANVAS_SIZE;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.clearRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
+      for (const stroke of strokes) paintStroke(context, stroke);
+      if (current.length > 1) paintStroke(context, { points: current, color, width: size, erase: eraser });
+    } catch { return; }
   }, [color, current, eraser, size, strokes]);
 
   useEffect(() => {
     const canvas = backgroundCanvasRef.current;
     if (!canvas) return;
-    canvas.width = DRAW_CANVAS_SIZE; canvas.height = DRAW_CANVAS_SIZE;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.fillStyle = "#ffffff"; context.fillRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
-    if (!backgroundUrl) return;
-    const image = new Image();
-    image.onload = () => { const fit = containImage(image.naturalWidth, image.naturalHeight); context.drawImage(image, fit.x, fit.y, fit.width, fit.height); };
-    image.src = backgroundUrl;
+    try {
+      canvas.width = DRAW_CANVAS_SIZE; canvas.height = DRAW_CANVAS_SIZE;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.fillStyle = "#ffffff"; context.fillRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
+      if (!backgroundUrl) return;
+      const image = new Image();
+      image.onload = () => {
+        try {
+          if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+          const fit = containImage(image.naturalWidth, image.naturalHeight);
+          context.drawImage(image, fit.x, fit.y, fit.width, fit.height);
+        } catch { setMessage("The imported image could not be displayed. Try another image."); }
+      };
+      image.src = backgroundUrl;
+    } catch { return; }
   }, [backgroundUrl]);
 
   function point(event: React.PointerEvent<HTMLCanvasElement>) { const rect = event.currentTarget.getBoundingClientRect(); return canvasPoint(event.clientX, event.clientY, rect); }
-  function start(event: React.PointerEvent<HTMLCanvasElement>) { event.preventDefault(); pointerRef.current = event.pointerId; try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* WebView fallback */ } setCurrent([point(event)]); }
-  function move(event: React.PointerEvent<HTMLCanvasElement>) { if (pointerRef.current !== event.pointerId) return; event.preventDefault(); setCurrent((value) => value.length >= 4096 ? value : [...value, point(event)]); }
-  function end(event?: React.PointerEvent<HTMLCanvasElement>) { if (event && pointerRef.current !== event.pointerId) return; pointerRef.current = null; const stroke = completedStroke(current, color, size, eraser); if (stroke) setStrokes((value) => [...value, stroke]); setRedo([]); setCurrent([]); }
+  function start(event: React.PointerEvent<HTMLCanvasElement>) {
+    event.preventDefault();
+    pointerRef.current = event.pointerId;
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* constrained WebView fallback */ }
+    const next = [point(event)];
+    currentRef.current = next;
+    setCurrent(next);
+  }
+  function move(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (pointerRef.current !== event.pointerId) return;
+    event.preventDefault();
+    setCurrent((value) => {
+      const next = value.length >= 4096 ? value : [...value, point(event)];
+      currentRef.current = next;
+      return next;
+    });
+  }
+  function end(event?: React.PointerEvent<HTMLCanvasElement>) {
+    if (event && pointerRef.current !== event.pointerId) return;
+    pointerRef.current = null;
+    const stroke = completedStroke(currentRef.current, color, size, eraser);
+    if (stroke) setStrokes((value) => [...value, stroke]);
+    setRedo([]);
+    currentRef.current = [];
+    setCurrent([]);
+  }
 
   async function importImage(file: File | undefined) {
     if (!file) return;

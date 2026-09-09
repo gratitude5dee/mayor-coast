@@ -56,6 +56,12 @@ Copy `.env.example` to `.env.local` only for local development. Real values belo
 
 Creative deployment settings are `COAST_CREATIVE_RUNTIME_URL`, `COAST_DRAW_RUNTIME_URL`, `COAST_DRAW_ENABLED`, `COAST_DRAW_MODEL`, `COAST_CREATIVE_CLEANUP_URL`, `OPENAI_API_KEY`, `GMI_CLOUD_API_KEY`, `GMI_REQUEST_QUEUE_URL`, `FAL_KEY`, `GROQ_API_KEY` (optional prompt compiler), `BLOB_READ_WRITE_TOKEN`, `COAST_PUBLIC_URL`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`. `COAST_DRAW_MODEL` defaults to `gpt-image-2.5-flare`; do not silently substitute another model when Flare access is unavailable. A live transcript card additionally uses `COAST_DRAW_APPLE_TEAM_ID`, `COAST_DRAW_EXTENSION_BUNDLE_ID`, and the optional `COAST_DRAW_APP_STORE_ID`; the values must match the signed target under `ios/CoastDraw`. Convex must also hold the matching `COAST_CONVEX_SERVICE_SECRET`; Link CLI runtime files are packaged through the pinned `@stripe/link-cli` dependency.
 
+## Operations dashboard
+
+The private dashboard at `/admin` shows paginated creative jobs, turn and message metadata, free-usage reservations, top-up orders, payment-event deduplication records, purchased balances, ledger entries, Link connection status, and outbound delivery state. It refreshes every 15 seconds. Its Convex query projects a fixed allowlist: prompts, message bodies, sender addresses, private media, checkout URLs, and wallet credentials never reach the browser.
+
+Access uses an eight-hour Secure, HttpOnly session. Store only the SHA-256 hash of a high-entropy access key in the production Convex environment as `COAST_ADMIN_PASSWORD_HASH`. Rotate the key by replacing that hash; existing browser sessions expire independently after eight hours.
+
 ## Fixed dataset
 
 The beta is locked to `snapshot-99f2d46a008bec47efae` in `../data/convex/snapshots/`. It contains 129 places, 444 event series, 514 event occurrences, 107 explicit recommendations, and 636 serving experience cards. All nine source collections total 251,679 documents.
@@ -85,6 +91,7 @@ pnpm snapshot:import -- --prod --yes
 - `POST /api/internal/delivery` — service-authenticated Photon delivery bridge.
 - `GET /api/stripe/creative-topup?order_id=...` — fixed $9.99 Checkout redirect for a server-owned order.
 - `POST /api/stripe/webhook` — raw-body verified Stripe settlement endpoint.
+- `POST /api/admin/session` and `GET /api/admin/records` — same-origin login and authenticated, privacy-projected operations data.
 
 The webhook is a Node route. The Photon adapter verifies the exact raw request body and its five-minute signature window. Convex claims every delivery before any acknowledgment or generation work.
 

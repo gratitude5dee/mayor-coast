@@ -1,0 +1,46 @@
+.shell {
+  min-height: 100vh;
+  background: #101e18;
+  color: #f7f1df;
+  padding: 36px clamp(16px, 4vw, 64px);
+  font-family: system-ui, sans-serif;
+}
+
+.shell * { box-sizing: border-box; }
+.header { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 32px; }
+.eyebrow { color: #efba56; letter-spacing: .18em; font-size: 12px; font-weight: 750; }
+.header h1 { font-size: clamp(28px, 4vw, 46px); letter-spacing: -.04em; margin: 12px 0; }
+.header p, .panel p, .login p, .footnote { color: #adbfb1; line-height: 1.6; }
+.shell button { background: #263d30; border: 1px solid #47604e; border-radius: 10px; color: #f7f1df; padding: 12px 16px; cursor: pointer; min-height: 44px; }
+.shell button:disabled { opacity: .4; cursor: default; }
+.shell button:hover:not(:disabled) { background: #38513e; }
+.shell input { background: #102019; color: #fff; border: 1px solid #526b58; border-radius: 10px; padding: 13px; font: inherit; }
+.shell input:focus { outline: 2px solid #efba56; }
+.nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 24px 0; }
+.nav button[aria-current] { background: #efba56; color: #15221a; border-color: #efba56; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+.cards article, .panel, .login { border: 1px solid #354a3c; border-radius: 18px; background: #1b2c22; padding: 24px; }
+.cards span, .cards small { display: block; color: #adbfb1; font-size: 13px; }
+.cards strong { display: block; font-size: 24px; letter-spacing: -.02em; margin: 14px 0; }
+.controls { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.controls input { flex: 1; max-width: 420px; min-width: 180px; }
+.controls span { color: #b6c6b9; font-size: 13px; }
+.panel h2 { font-size: 22px; margin: 0; }
+.table { overflow: auto; margin: 20px 0; }
+.table table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.table th { color: #b6c6b9; font-weight: 500; text-transform: capitalize; white-space: nowrap; }
+.table td, .table th { padding: 14px 12px; border-bottom: 1px solid #34473a; }
+.table td { max-width: 270px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table tbody tr:hover { background: #233b2c; }
+.login { max-width: 480px; margin: 60px auto; }
+.login label { display: grid; gap: 10px; }
+.login button { margin-top: 20px; width: 100%; background: #efba56; color: #14231a; font-weight: 700; }
+.footnote { font-size: 12px; margin-top: 24px; }
+
+@media (max-width: 700px) {
+  .cards { grid-template-columns: 1fr; }
+  .header { align-items: flex-start; }
+  .panel { padding: 16px; }
+  .cards article { padding: 18px; }
+  .cards strong { margin: 8px 0; }
+}

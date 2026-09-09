@@ -7,11 +7,13 @@ import {
   admissionCost,
   availableFreeUsage,
   buildProviderRequest,
+  creativeLatencyReward,
+  creativePollDelayMs,
   parseCreativeRequest,
   topupMessage,
   validateAttachmentSizes,
 } from "../src/lib/creative";
-import { creativeRuntimeRequestSchema } from "../src/app/api/internal/creative/route";
+import { creativeRuntimeRequestSchema, falRequestId } from "../src/app/api/internal/creative/route";
 import { completedStroke } from "../src/lib/draw/canvas";
 import { drawLaunchSecret, drawSessionCookie } from "../src/lib/draw/launch";
 import { resolveMiniApp } from "@photon-ai/chat-adapter-imessage";
@@ -54,6 +56,22 @@ describe("creative commands and credits", () => {
     expect(result.input.duration).toBe(VIDEO_DURATION_SECONDS);
   });
 
+  it("accepts Fal queue IDs from current, compatibility, and header responses", () => {
+    expect(falRequestId({ request_id: "current-id" })).toBe("current-id");
+    expect(falRequestId({ requestId: "compat-id" })).toBe("compat-id");
+    expect(falRequestId({}, "header-id")).toBe("header-id");
+    expect(falRequestId({})).toBeNull();
+  });
+
+  it("polls images aggressively and scores their delivery target", () => {
+    expect(creativePollDelayMs("imagine", 0)).toBe(1_000);
+    expect(creativePollDelayMs("draw", 19_999)).toBe(1_000);
+    expect(creativePollDelayMs("zap", 0)).toBe(3_000);
+    expect(creativeLatencyReward("imagine", 9_000)).toBe(1);
+    expect(creativeLatencyReward("imagine", 15_000)).toBe(0.5);
+    expect(creativeLatencyReward("imagine", 21_000)).toBe(0);
+  });
+
   it("accepts the fenced Convex worker envelope", () => {
     expect(creativeRuntimeRequestSchema.safeParse({
       jobId: "job-1",
@@ -70,6 +88,8 @@ describe("creative commands and credits", () => {
       command: "zap",
       encryptedPayload: "v1." + "x".repeat(40),
     }).success).toBe(false);
+    expect(creativeRuntimeRequestSchema.safeParse({ operation: "canary" }).success).toBe(true);
+    expect(creativeRuntimeRequestSchema.safeParse({ operation: "canary", command: "zap" }).success).toBe(false);
   });
 
   it("reads draw authorization from the URL fragment and scopes its cookie to APIs", () => {

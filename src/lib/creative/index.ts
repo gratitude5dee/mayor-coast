@@ -90,6 +90,26 @@ export function priceFor(command: CreativeCommand): number {
   return command === "zap" ? VIDEO_PRICE_CENTS : IMAGE_PRICE_CENTS;
 }
 
+/**
+ * Keep image completion pickup inside its 10–20 second target without polling
+ * long-running video renders at image frequency.
+ */
+export function creativePollDelayMs(command: CreativeCommand, elapsedMs: number): number {
+  if (command === "zap") return elapsedMs < 60_000 ? 3_000 : 5_000;
+  if (elapsedMs < 20_000) return 1_000;
+  if (elapsedMs < 60_000) return 2_000;
+  return 5_000;
+}
+
+/** A bounded delivery score for production latency monitoring. */
+export function creativeLatencyReward(command: CreativeCommand, totalMs: number): number {
+  const targetMs = command === "zap" ? 60_000 : 10_000;
+  const maximumMs = command === "zap" ? 180_000 : 20_000;
+  if (totalMs <= targetMs) return 1;
+  if (totalMs >= maximumMs) return 0;
+  return Number(((maximumMs - totalMs) / (maximumMs - targetMs)).toFixed(4));
+}
+
 export function countFreeUsage(
   windows: readonly UsageWindow[],
   kind: "image" | "video",

@@ -47,6 +47,7 @@ const requestSchema = z
       "poll",
       "creative_attachment",
       "creative_caption",
+      "creative_status",
       "billing",
       "draw_card",
     ]),
@@ -90,7 +91,7 @@ export async function POST(request: Request): Promise<Response> {
     const { adapter } = getOrCreateCoastPhotonRuntime();
     let providerMessageId: string;
 
-    if (input.stage === "response") {
+    if (input.stage === "response" || input.stage === "creative_status") {
       const text = z.string().trim().min(1).max(2_000).parse(input.payload.text);
       providerMessageId = (await adapter.postMessage(threadId, text)).id;
     } else if (input.stage === "draw_card") {

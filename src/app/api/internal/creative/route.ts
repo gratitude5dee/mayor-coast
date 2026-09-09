@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { put } from "@vercel/blob";
-import { ApiError, createFalClient } from "@fal-ai/client";
 
 import {
   buildProviderRequest,
@@ -15,7 +14,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-export const creativeRuntimeRequestSchema = z.object({
+const creativeWorkerRequestSchema = z.object({
   operation: z.enum(["submit", "poll"]).default("submit"),
   jobId: z.string().min(1).max(128),
   attemptId: z.string().min(1).max(256),
@@ -29,6 +28,11 @@ export const creativeRuntimeRequestSchema = z.object({
   }
 });
 
+export const creativeRuntimeRequestSchema = z.union([
+  creativeWorkerRequestSchema,
+  z.object({ operation: z.literal("canary") }).strict(),
+]);
+
 export async function POST(request: Request): Promise<Response> {
   if (!authorizeInternalRequest(request)) return privateJson({ error: "unauthorized" }, { status: 401 });
   const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
@@ -36,6 +40,7 @@ export async function POST(request: Request): Promise<Response> {
   let input: z.infer<typeof creativeRuntimeRequestSchema>;
   try { input = creativeRuntimeRequestSchema.parse(await request.json()); } catch { return privateJson({ error: "invalid_request" }, { status: 400 }); }
   try {
+    if (input.operation === "canary") return privateJson(await runFalCanary());
     const decrypted = decryptCreativePayload(input.encryptedPayload, secret);
     const envelope = JSON.parse(decrypted) as {
       messages?: Array<{
@@ -99,9 +104,9 @@ export async function POST(request: Request): Promise<Response> {
     if (input.operation === "poll") return privateJson({ error: "provider_poll_not_supported" }, { status: 422 });
     return privateJson({ status: "completed", ...(await materializePrivateMedia(await submitGmi(provider.model, provider.input), parsed.command)) });
   } catch (error) {
-    const errorStatus = error instanceof ApiError
-      ? error.status
-      : typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : null;
+    const errorStatus = typeof (error as { status?: unknown })?.status === "number"
+      ? (error as { status: number }).status
+      : null;
     const rawCode = errorStatus !== null
       ? `FAL_HTTP_${errorStatus}`
       : error instanceof Error ? error.message.slice(0, 120) : "creative_provider_failed";
@@ -191,29 +196,107 @@ function falMedia(body: { video?: { url?: string }; url?: string; output?: { vid
   return url ? { url, mimeType: "video/mp4", filename: "coast-zap.mp4", caption: "Here’s your 15-second zap." } : null;
 }
 
+export function falRequestId(
+  body: unknown,
+  responseHeader?: string | null,
+): string | null {
+  if (typeof body === "object" && body !== null) {
+    const record = body as { request_id?: unknown; requestId?: unknown };
+    const value = record.request_id ?? record.requestId;
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return typeof responseHeader === "string" && responseHeader.trim().length > 0
+    ? responseHeader.trim()
+    : null;
+}
+
+function falQueueUrl(model: string, requestId?: string, suffix = ""): string {
+  if (!/^[a-z0-9][a-z0-9/_-]{2,160}$/u.test(model)) throw new Error("FAL_MODEL_INVALID");
+  const base = `https://queue.fal.run/${model}`;
+  return requestId
+    ? `${base}/requests/${encodeURIComponent(requestId)}${suffix}`
+    : base;
+}
+
+async function falJson(
+  response: Response,
+  operation: "SUBMIT" | "STATUS" | "RESULT",
+): Promise<unknown> {
+  if (!response.ok) {
+    const error = new Error(`FAL_HTTP_${response.status}`) as Error & { status: number };
+    error.status = response.status;
+    throw error;
+  }
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`FAL_${operation}_NOT_JSON`);
+  }
+}
+
 async function submitFal(model: string, input: Record<string, unknown>): Promise<FalResult> {
   const key = process.env.FAL_KEY;
   if (!key) throw new Error("FAL_NOT_CONFIGURED");
-  const client = createFalClient({ credentials: key.trim(), retry: { maxRetries: 0 } });
-  const queued = await client.queue.submit(model, {
-    input,
-    abortSignal: AbortSignal.timeout(20_000),
+  const response = await fetch(falQueueUrl(model), {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      authorization: `Key ${key.trim()}`,
+      "content-type": "application/json",
+      "x-fal-queue-priority": "normal",
+    },
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(20_000),
   });
-  return { status: "queued", providerRequestId: queued.request_id };
+  const body = await falJson(response, "SUBMIT");
+  const providerRequestId = falRequestId(body, response.headers.get("x-fal-request-id"));
+  if (!providerRequestId) throw new Error("FAL_REQUEST_ID_MISSING");
+  return { status: "queued", providerRequestId };
 }
 
 async function pollFal(model: string, providerRequestId: string): Promise<FalResult> {
   const key = process.env.FAL_KEY;
   if (!key) throw new Error("FAL_NOT_CONFIGURED");
-  const client = createFalClient({ credentials: key.trim(), retry: { maxRetries: 0 } });
-  const status = await client.queue.status(model, { requestId: providerRequestId, abortSignal: AbortSignal.timeout(15_000) });
+  const headers = { accept: "application/json", authorization: `Key ${key.trim()}` };
+  const statusResponse = await fetch(falQueueUrl(model, providerRequestId, "/status"), {
+    headers,
+    signal: AbortSignal.timeout(15_000),
+  });
+  const status = await falJson(statusResponse, "STATUS") as { status?: unknown };
   if (status.status === "IN_QUEUE") return { status: "queued", providerRequestId };
   if (status.status === "IN_PROGRESS") return { status: "running", providerRequestId };
-  const result = await client.queue.result(model, { requestId: providerRequestId, abortSignal: AbortSignal.timeout(20_000) });
-  const body = result.data as { video?: { url?: string }; url?: string; output?: { video?: { url?: string } } };
+  if (status.status !== "COMPLETED") throw new Error("FAL_STATUS_INVALID");
+  const resultResponse = await fetch(falQueueUrl(model, providerRequestId), {
+    headers,
+    signal: AbortSignal.timeout(20_000),
+  });
+  const body = await falJson(resultResponse, "RESULT") as { video?: { url?: string }; url?: string; output?: { video?: { url?: string } } };
   const media = falMedia(body);
   if (!media) throw new Error("FAL_RESULT_MISSING_URL");
   return { status: "completed", providerRequestId, media };
+}
+
+async function runFalCanary(): Promise<{ status: "ok"; cancelled: boolean }> {
+  const model = "minimax/h3-max-turbo/text-to-video";
+  const queued = await submitFal(model, {
+    prompt: "COAST provider connection canary. Static amber circle on a dark green background.",
+    duration: 5,
+    resolution: "768P",
+    prompt_expansion_mode: "balanced",
+    enable_safety_checker: true,
+    aspect_ratio: "1:1",
+  });
+  if (queued.status === "completed" || !queued.providerRequestId) {
+    throw new Error("FAL_CANARY_ENQUEUE_INVALID");
+  }
+  const key = process.env.FAL_KEY;
+  if (!key) throw new Error("FAL_NOT_CONFIGURED");
+  const response = await fetch(falQueueUrl(model, queued.providerRequestId, "/cancel"), {
+    method: "PUT",
+    headers: { accept: "application/json", authorization: `Key ${key.trim()}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  return { status: "ok", cancelled: response.ok };
 }
 
 async function pollProviderResult(

@@ -12,6 +12,7 @@ import {
 import { isServingExperienceEligible } from "./lib/servingEligibility";
 import { turnPlan } from "./lib/validators";
 import { settleCreativeFunding } from "./lib/creative";
+import { creativeLatencyReward } from "../src/lib/creative";
 
 const MAX_MODEL_STEPS = 2;
 const MAX_TOOL_CALLS = 4;
@@ -297,6 +298,7 @@ function stageRank(
     | "poll"
     | "creative_attachment"
     | "creative_caption"
+    | "creative_status"
     | "billing"
     | "draw_card",
 ): number {
@@ -307,7 +309,7 @@ function stageRank(
   if (stage === "location_request" || stage === "maps_card") return 4;
   if (stage === "artist_drop") return 4;
   if (stage === "creative_attachment") return 5;
-  if (stage === "creative_caption") return 6;
+  if (stage === "creative_caption" || stage === "creative_status") return 6;
   if (stage === "billing") return 5;
   if (stage === "draw_card") return 1;
   return 4;
@@ -980,6 +982,7 @@ export const claimNextDelivery = internalMutation({
         v.literal("poll"),
         v.literal("creative_attachment"),
         v.literal("creative_caption"),
+        v.literal("creative_status"),
         v.literal("billing"),
         v.literal("draw_card"),
       ),
@@ -1228,7 +1231,15 @@ export const recordDeliverySuccess = internalMutation({
         .withIndex("by_delivery", (q) => q.eq("deliveryId", delivery._id))
         .unique();
       if (creativeJob !== null) {
-        await ctx.db.patch(creativeJob._id, { state: "delivered", updatedAtMs: args.nowMs });
+        await ctx.db.patch(creativeJob._id, {
+          state: "delivered",
+          deliveredAtMs: args.nowMs,
+          latencyReward: creativeLatencyReward(
+            creativeJob.command,
+            Math.max(0, args.nowMs - creativeJob.createdAtMs),
+          ),
+          updatedAtMs: args.nowMs,
+        });
         await settleCreativeFunding(ctx, creativeJob, args.nowMs);
         if (creativeJob.drawSessionId) {
           const prior = await ctx.db

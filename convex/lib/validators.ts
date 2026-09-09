@@ -226,6 +226,7 @@ export const outboundStage = v.union(
   v.literal("poll"),
   v.literal("creative_attachment"),
   v.literal("creative_caption"),
+  v.literal("creative_status"),
   v.literal("billing"),
   v.literal("draw_card"),
 );

@@ -4,11 +4,8 @@ import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { serviceSecretFingerprintHex } from "./lib/service_auth";
-import { admitCreativeJob, releaseCreativeFunding } from "./lib/creative";
-
-const DAY_MS = 24 * 60 * 60 * 1_000;
-const IMAGE_FREE_LIMIT = 10;
-const VIDEO_FREE_LIMIT = 10;
+import { admitCreativeJob, getCreativeCredits, releaseCreativeFunding } from "./lib/creative";
+import { creativePollDelayMs } from "../src/lib/creative";
 
 const jobCommand = v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"));
 const reservationSource = v.union(v.literal("free"), v.literal("credit"), v.literal("payment"));
@@ -16,21 +13,7 @@ const reservationSource = v.union(v.literal("free"), v.literal("credit"), v.lite
 export const getCredits = internalQuery({
   args: { userId: v.id("coastUsers"), nowMs: v.number() },
   returns: v.object({ imageFreeRemaining: v.number(), videoFreeRemaining: v.number(), creditCents: v.number(), activeJob: v.boolean() }),
-  handler: async (ctx, args) => {
-    const usage = await ctx.db.query("creativeUsage").withIndex("by_user_kind_admitted", (q) => q.eq("userId", args.userId)).take(100);
-    const activeJobs = await ctx.db.query("creativeJobs").withIndex("by_user_state", (q) => q.eq("userId", args.userId)).take(20);
-    const imageCount = usage.filter((item) => item.kind === "image" && item.admittedAtMs > args.nowMs - DAY_MS).length;
-    const videoCount = usage.filter((item) => item.kind === "video" && item.admittedAtMs > args.nowMs - DAY_MS).length;
-    const ledger = await ctx.db.query("creativeCreditLedger").withIndex("by_user_created", (q) => q.eq("userId", args.userId)).collect();
-    const creditCents = ledger.reduce((sum, item) => sum + item.amountCents, 0);
-    const activeJob = activeJobs.some((job) => !["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state));
-    return {
-      imageFreeRemaining: Math.max(0, IMAGE_FREE_LIMIT - imageCount),
-      videoFreeRemaining: Math.max(0, VIDEO_FREE_LIMIT - videoCount),
-      creditCents,
-      activeJob,
-    };
-  },
+  handler: (ctx, args) => getCreativeCredits(ctx, args.userId, args.nowMs),
 });
 
 export const admit = internalMutation({
@@ -45,49 +28,7 @@ export const admit = internalMutation({
     nowMs: v.number(),
   },
   returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: reservationSource, amountCents: v.number() }),
-  handler: async (ctx, args) => {
-    const existing = await ctx.db.query("creativeJobs").withIndex("by_request_key", (q) => q.eq("requestKey", args.requestKey)).unique();
-    if (existing !== null) return { jobId: existing._id, state: existing.state, source: existing.reservationSource, amountCents: existing.reservedCents };
-    const activeJobs = await ctx.db.query("creativeJobs").withIndex("by_user_state", (q) => q.eq("userId", args.userId)).take(20);
-    if (activeJobs.some((job) => !["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state))) {
-      throw new Error("CREATIVE_JOB_ALREADY_ACTIVE");
-    }
-    const kind = args.command === "imagine" ? "image" : "video";
-    const price = args.command === "imagine" ? 50 : 100;
-    const usage = await ctx.db.query("creativeUsage").withIndex("by_user_kind_admitted", (q) => q.eq("userId", args.userId).eq("kind", kind)).take(100);
-    const freeLimit = kind === "image" ? IMAGE_FREE_LIMIT : VIDEO_FREE_LIMIT;
-    const freeAvailable = usage.filter((item) => item.admittedAtMs > args.nowMs - DAY_MS).length < freeLimit;
-    let source: "free" | "credit" | "payment" = freeAvailable ? "free" : "payment";
-    if (!freeAvailable) {
-      const ledger = await ctx.db.query("creativeCreditLedger").withIndex("by_user_created", (q) => q.eq("userId", args.userId)).collect();
-      const balance = ledger.reduce((sum, item) => sum + item.amountCents, 0);
-      if (balance >= price) source = "credit";
-    }
-    const reservationId = `${args.requestKey}:reservation`;
-    const state = source === "payment" ? "awaiting_payment" : "admitted";
-    const jobId = await ctx.db.insert("creativeJobs", {
-      userId: args.userId,
-      threadId: args.threadId,
-      sourceMessageId: args.sourceMessageId,
-      turnId: args.turnId,
-      requestKey: args.requestKey,
-      command: args.command,
-      state,
-      encryptedPayload: args.encryptedPayload,
-      reservationSource: source,
-      reservedCents: source === "free" ? 0 : price,
-      reservationId,
-      createdAtMs: args.nowMs,
-      updatedAtMs: args.nowMs,
-      expiresAtMs: args.nowMs + DAY_MS,
-    });
-    if (source === "free") {
-      await ctx.db.insert("creativeUsage", { userId: args.userId, kind, jobId, reservationId, admittedAtMs: args.nowMs, settled: false });
-    } else if (source === "credit") {
-      await ctx.db.insert("creativeCreditLedger", { userId: args.userId, jobId, kind: "reserve", amountCents: -price, idempotencyKey: reservationId, createdAtMs: args.nowMs });
-    }
-    return { jobId, state, source, amountCents: source === "free" ? 0 : price };
-  },
+  handler: (ctx, args) => admitCreativeJob(ctx, args),
 });
 
 export const addTopupCredit = internalMutation({
@@ -311,7 +252,7 @@ export const recordProviderSubmission = internalMutation({
       lastErrorCode: undefined,
       updatedAtMs: args.nowMs,
     });
-    await ctx.scheduler.runAfter(5_000, internal.creative.poll, { jobId: job._id });
+    await ctx.scheduler.runAfter(creativePollDelayMs(job.command, 0), internal.creative.poll, { jobId: job._id });
     return true;
   },
 });
@@ -334,7 +275,8 @@ export const recordProviderProgress = internalMutation({
     const job = await ctx.db.get(args.jobId);
     if (!job || !["queued", "running", "retryable_failure"].includes(job.state) || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken || !job.providerRequestId) return false;
     await ctx.db.patch(job._id, { state: args.state, heartbeatAtMs: args.nowMs, lastErrorCode: undefined, updatedAtMs: args.nowMs });
-    await ctx.scheduler.runAfter(5_000, internal.creative.poll, { jobId: job._id });
+    const elapsedMs = Math.max(0, args.nowMs - (job.submittedAtMs ?? job.createdAtMs));
+    await ctx.scheduler.runAfter(creativePollDelayMs(job.command, elapsedMs), internal.creative.poll, { jobId: job._id });
     return true;
   },
 });
@@ -383,7 +325,7 @@ export const completeProcessing = internalMutation({
       createdAtMs: args.nowMs,
       updatedAtMs: args.nowMs,
     });
-    await ctx.db.patch(job._id, { state: "ready_for_delivery", deliveryId: delivery, outputMediaId: mediaId, updatedAtMs: args.nowMs });
+    await ctx.db.patch(job._id, { state: "ready_for_delivery", deliveryId: delivery, outputMediaId: mediaId, completedAtMs: args.nowMs, updatedAtMs: args.nowMs });
     if (job.drawSessionId) {
       const prior = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
       await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence: (prior.length ? Math.max(...prior.map(item => item.sequence)) : 0) + 1, kind: "completed", state: "ready_for_delivery", mediaId, createdAtMs: args.nowMs });
@@ -408,6 +350,48 @@ export const failProcessing = internalMutation({
       if (args.outcome === "retryable" && job.providerRequestId) await ctx.scheduler.runAfter(15_000, internal.creative.poll, { jobId: job._id });
     }
     return null;
+  },
+});
+
+export const releaseLegacyUnknown = internalMutation({
+  args: { jobId: v.id("creativeJobs"), expectedErrorCode: v.string(), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (
+      !job ||
+      job.state !== "submission_unknown" ||
+      job.providerRequestId !== undefined ||
+      job.lastErrorCode !== args.expectedErrorCode
+    ) return false;
+    await ctx.db.patch(job._id, {
+      state: "failed",
+      lastErrorCode: "LEGACY_PROVIDER_SUBMISSION_UNRECOVERABLE",
+      updatedAtMs: args.nowMs,
+    });
+    await releaseCreativeFunding(ctx, job, args.nowMs);
+    const existing = await ctx.db
+      .query("outboundDeliveries")
+      .withIndex("by_idempotency", (q) => q.eq("idempotencyKey", `${job._id}:legacy_unknown_status`))
+      .unique();
+    if (!existing) {
+      await ctx.db.insert("outboundDeliveries", {
+        turnId: job.turnId,
+        threadId: job.threadId,
+        stage: "creative_status",
+        sequence: 3,
+        itemKey: `${String(job._id)}:legacy-status`,
+        idempotencyKey: `${job._id}:legacy_unknown_status`,
+        payload: { text: "That render never produced a trackable job, so I cleared it. Please send /zap again." },
+        status: "pending",
+        attemptCount: 0,
+        nextAttemptAtMs: args.nowMs,
+        createdAtMs: args.nowMs,
+        updatedAtMs: args.nowMs,
+      });
+      await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId: job.turnId });
+    }
+    return true;
   },
 });
 
@@ -489,6 +473,33 @@ export const poll = internalAction({
       await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: "CREATIVE_POLL_FAILED", outcome: "retryable", nowMs: Date.now() });
     }
     return null;
+  },
+});
+
+export const providerCanary = internalAction({
+  args: {},
+  returns: v.object({ ok: v.boolean(), cancelled: v.boolean(), code: v.string() }),
+  handler: async () => {
+    const runtimeUrl = process.env.COAST_CREATIVE_RUNTIME_URL;
+    const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
+    if (!runtimeUrl || !secret) return { ok: false, cancelled: false, code: "CREATIVE_RUNTIME_NOT_CONFIGURED" };
+    try {
+      const response = await fetch(runtimeUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+        body: JSON.stringify({ operation: "canary" }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) return { ok: false, cancelled: false, code: await runtimeErrorCode(response) };
+      const body = await response.json() as { status?: unknown; cancelled?: unknown };
+      return {
+        ok: body.status === "ok",
+        cancelled: body.cancelled === true,
+        code: body.status === "ok" ? "FAL_CANARY_OK" : "FAL_CANARY_INVALID_RESULT",
+      };
+    } catch {
+      return { ok: false, cancelled: false, code: "FAL_CANARY_REQUEST_FAILED" };
+    }
   },
 });
 

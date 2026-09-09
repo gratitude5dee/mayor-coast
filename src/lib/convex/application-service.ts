@@ -93,8 +93,12 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
         : await this.options.client.action(api.service.claimInbound, {
             ...common,
             ...creativeFields,
-            ...(input.creativeCommandAmbiguous ? { creativeCommandAmbiguous: true } : {}),
-            text: input.messages.at(-1)?.text ?? "",
+            ...(input.creativeCommand && input.creativeCommandAmbiguous
+              ? { creativeCommandAmbiguous: true }
+              : {}),
+            text: input.creativeCommand
+              ? "[creative request omitted]"
+              : input.messages.at(-1)?.text ?? "",
             ...(input.locationSignal ? { locationSignal: true } : {}),
             ...(input.unsupportedContent
               ? { unsupportedContent: input.unsupportedContent }

@@ -1,4 +1,4 @@
-import type { Message, Thread } from "chat";
+import type { Message, MessageContext, Thread } from "chat";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CoastApplicationService } from "../src/lib/photon/contracts";
@@ -29,7 +29,10 @@ function application(
   };
 }
 
-function message(raw: unknown = {}): Message {
+function message(
+  raw: unknown = {},
+  options: { id?: string; text?: string } = {},
+): Message {
   return {
     attachments: [],
     author: {
@@ -39,10 +42,10 @@ function message(raw: unknown = {}): Message {
       userId: "+14155550100",
       userName: "+14155550100",
     },
-    id: "message_1",
+    id: options.id ?? "message_1",
     metadata: { dateSent: new Date("2026-08-31T20:00:00Z"), edited: false },
     raw,
-    text: "What should I do tonight?",
+    text: options.text ?? "What should I do tonight?",
   } as unknown as Message;
 }
 
@@ -65,6 +68,31 @@ function ports() {
     signal: new AbortController().signal,
   } as unknown as Thread;
   return { adapter, posts, thread };
+}
+
+async function captureInboundClaim(
+  text: string,
+  skippedTexts: string[] = [],
+) {
+  const app = application();
+  const { adapter, thread } = ports();
+  const handler = createCoastInboundHandler({ adapter, application: app });
+  const current = message({}, {
+    id: `message_${skippedTexts.length + 1}`,
+    text,
+  });
+  const skipped = skippedTexts.map((skippedText, index) =>
+    message({}, { id: `message_${index + 1}`, text: skippedText }),
+  );
+  const context: MessageContext | undefined = skipped.length > 0
+    ? { skipped, totalSinceLastHandler: skipped.length + 1 }
+    : undefined;
+
+  await runWithPhotonDeliveryContext({ webhookId: `webhook_${current.id}` }, () =>
+    handler(thread, current, undefined, context),
+  );
+
+  return vi.mocked(app.claimInbound).mock.calls[0]?.[0];
 }
 
 describe("COAST inbound transport", () => {
@@ -90,6 +118,9 @@ describe("COAST inbound transport", () => {
         webhookId: "webhook_1",
       }),
     );
+    expect(vi.mocked(app.claimInbound).mock.calls[0]?.[0]).not.toHaveProperty(
+      "creativeCommandAmbiguous",
+    );
     expect(thread.markAsRead).toHaveBeenCalledOnce();
     expect(adapter.addReaction).toHaveBeenCalledWith(
       thread.id,
@@ -101,6 +132,46 @@ describe("COAST inbound transport", () => {
     expect(posts).toEqual([]);
     expect(adapter.openModal).not.toHaveBeenCalled();
     expect(app.executeTurn).toHaveBeenCalledOnce();
+  });
+
+  it("routes zero creative tokens to the ordinary concierge", async () => {
+    const claim = await captureInboundClaim("What’s going on today?");
+
+    expect(claim).not.toHaveProperty("creativeCommand");
+    expect(claim).not.toHaveProperty("creativeCommandAmbiguous");
+    expect(claim?.messages).toEqual([
+      expect.objectContaining({ text: "What’s going on today?" }),
+    ]);
+  });
+
+  it("routes exactly one creative token without marking it ambiguous", async () => {
+    const claim = await captureInboundClaim("/draw a neon dragon");
+
+    expect(claim).toEqual(expect.objectContaining({ creativeCommand: "draw" }));
+    expect(claim).not.toHaveProperty("creativeCommandAmbiguous");
+  });
+
+  it.each(["/draw /draw", "/draw /zap a neon dragon"])(
+    "marks repeated or mixed creative tokens as ambiguous: %s",
+    async (text) => {
+      const claim = await captureInboundClaim(text);
+
+      expect(claim).toEqual(expect.objectContaining({
+        creativeCommand: "draw",
+        creativeCommandAmbiguous: true,
+      }));
+    },
+  );
+
+  it("preserves one creative command across an ordered debounced burst", async () => {
+    const claim = await captureInboundClaim("make it a neon dragon", ["/draw"]);
+
+    expect(claim).toEqual(expect.objectContaining({ creativeCommand: "draw" }));
+    expect(claim).not.toHaveProperty("creativeCommandAmbiguous");
+    expect(claim?.messages.map((item) => item.text)).toEqual([
+      "/draw",
+      "make it a neon dragon",
+    ]);
   });
 
   it("does not acknowledge or execute a duplicate delivery", async () => {

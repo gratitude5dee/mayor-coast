@@ -291,9 +291,11 @@ export const claimDelivery = internalMutation({
 
     // Defense in depth: even an authenticated caller cannot persist content
     // that it has classified as an attachment or private location share.
+    const creativeCommandAmbiguous =
+      args.creativeCommand !== undefined && args.creativeCommandAmbiguous === true;
     const creativeRequest = args.unsupportedContent === undefined && !args.locationSignal &&
-      (args.creativeCommand !== undefined || args.creativeCommandAmbiguous === true);
-    const creativeCommand = args.unsupportedContent || args.locationSignal || args.creativeCommandAmbiguous
+      (args.creativeCommand !== undefined || creativeCommandAmbiguous);
+    const creativeCommand = args.unsupportedContent || args.locationSignal || creativeCommandAmbiguous
       ? null
       : args.creativeCommand ?? detectCreativeCommand(args.text);
     const persistedText = args.locationSignal
@@ -351,7 +353,7 @@ export const claimDelivery = internalMutation({
       };
     }
 
-    if (args.creativeCommandAmbiguous) {
+    if (creativeCommandAmbiguous) {
       controlReply = {
         command,
         text: "Please send exactly one creative command per request: /imagine, /zap, or /draw.",
@@ -683,7 +685,7 @@ export const claimDelivery = internalMutation({
         activeTurn.creativeCommand !== creativeCommand
       ) {
         turnId = activeTurn._id;
-        const responseText = "Please send one creative command at a time: /imagine or /zap.";
+        const responseText = "Please send one creative command at a time: /imagine, /zap, or /draw.";
         await ctx.db.patch(activeTurn._id, {
           state: "response_planned",
           plan: {

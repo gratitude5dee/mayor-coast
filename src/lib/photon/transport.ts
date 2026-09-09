@@ -15,7 +15,6 @@ import {
 } from "./delivery-context";
 import { TypingLease } from "./typing";
 import { makeDeliveryKey } from "./webhook";
-import { classifyCreativeCommand } from "../coast/commands";
 
 export type CoastInboundHandlerDependencies = {
   adapter: Pick<iMessageAdapter, "addReaction" | "isDM" | "startTyping">;
@@ -46,20 +45,15 @@ export function createCoastInboundHandler(
     if (!webhookId) throw new Error("Missing verified Photon delivery context");
 
     const inboundMessages = [...(context?.skipped ?? []), message];
-    const creativeTokens = inboundMessages.flatMap((candidate) => {
-        const tokens = [...candidate.text.matchAll(/(?:^|\s)\/(imagine|zap|draw)\b/giu)]
-          .map((match) => match[1]?.toLowerCase())
-          .filter((value): value is "imagine" | "zap" | "draw" => value === "imagine" || value === "zap" || value === "draw");
-        return tokens.length > 0 ? tokens : [classifyCreativeCommand(candidate.text)];
-      }).filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
-    const creativeCommands = [...new Set(
-      inboundMessages.flatMap((candidate) => {
-        const tokens = [...candidate.text.matchAll(/(?:^|\s)\/(imagine|zap|draw)\b/giu)]
-          .map((match) => match[1]?.toLowerCase())
-          .filter((value): value is "imagine" | "zap" | "draw" => value === "imagine" || value === "zap" || value === "draw");
-        return tokens.length > 0 ? tokens : [classifyCreativeCommand(candidate.text)];
-      }).filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null),
-    )];
+    const creativeTokens = inboundMessages.flatMap((candidate) =>
+      [...candidate.text.matchAll(/(?:^|\s)\/(imagine|zap|draw)\b/giu)]
+        .map((match) => match[1]?.toLowerCase())
+        .filter(
+          (value): value is "imagine" | "zap" | "draw" =>
+            value === "imagine" || value === "zap" || value === "draw",
+        ),
+    );
+    const creativeCommands = [...new Set(creativeTokens)];
     const creativeCommand = creativeCommands[0] ?? null;
     const detectedContent = detectUnsupportedInboundContent(
       inboundMessages,
@@ -95,7 +89,7 @@ export function createCoastInboundHandler(
           }
         : {}),
       ...(creativeCommand ? { creativeCommand } : {}),
-      ...(creativeTokens.length !== 1 ? { creativeCommandAmbiguous: true as const } : {}),
+      ...(creativeTokens.length > 1 ? { creativeCommandAmbiguous: true as const } : {}),
     });
     registerPhotonCriticalTask(claimTask);
     const claim = await claimTask;

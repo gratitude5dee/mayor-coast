@@ -90,7 +90,9 @@ export const claimInbound = action({
             encryptedCreativePayload: args.encryptedCreativePayload,
           }
         : {}),
-      ...(args.creativeCommandAmbiguous ? { creativeCommandAmbiguous: true } : {}),
+      ...(args.creativeCommand && args.creativeCommandAmbiguous
+        ? { creativeCommandAmbiguous: true }
+        : {}),
       receivedAtMs: args.receivedAtMs,
     });
   },

@@ -141,11 +141,13 @@ export default function DrawStudio({ sessionId }: Props) {
   function move(event: React.PointerEvent<HTMLCanvasElement>) {
     if (pointerRef.current !== event.pointerId) return;
     event.preventDefault();
-    setCurrent((value) => {
-      const next = value.length >= 4096 ? value : [...value, point(event)];
-      currentRef.current = next;
-      return next;
-    });
+    // React clears currentTarget after dispatch. Read coordinates now, never
+    // inside a state updater that React may execute during a later render.
+    const nextPoint = point(event);
+    const value = currentRef.current;
+    const next = value.length >= 4096 ? value : [...value, nextPoint];
+    currentRef.current = next;
+    setCurrent(next);
   }
   function end(event?: React.PointerEvent<HTMLCanvasElement>) {
     if (event && pointerRef.current !== event.pointerId) return;

@@ -76,3 +76,38 @@ it.each(["fast", "turbo"])("Generate uploads a sketch and admits exactly once in
   expect(JSON.parse(requests[1]?.body as string)).toMatchObject({ mediaId: "opaque-media", mode });
   vi.unstubAllGlobals();
 });
+
+it("keeps a completed image in Preview until the user explicitly saves it to iMessage", async () => {
+  vi.stubGlobal("React", await import("react"));
+  queue.overrides = {
+    8: { id: "job", state: "ready_for_save", outputUrl: "/private/final.jpg" },
+    9: "preview",
+    12: true,
+  };
+  const root = DrawStudio({ sessionId: "test" });
+  const buttons: string[] = [];
+  let previewSource: unknown;
+  let saveClick: (() => void) | undefined;
+  function visit(node: ReactNode) {
+    if (!isValidElement<Record<string, unknown>>(node)) return;
+    if (node.type === "button") {
+      const text = String(node.props.children);
+      buttons.push(text);
+      if (text === "Save to iMessage") saveClick = node.props.onClick as () => void;
+    }
+    if (node.type === "img" && node.props.alt === "COAST generated preview") previewSource = node.props.src;
+    Children.forEach(node.props.children as ReactNode, visit);
+  }
+  visit(root);
+  expect(previewSource).toBe("/private/final.jpg");
+  expect(buttons).toContain("Save to iMessage");
+  expect(buttons).not.toContain("Cancel");
+  const requests: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    requests.push(url);
+    return Response.json({ ok: true, state: "ready_for_delivery" });
+  }));
+  saveClick!();
+  await vi.waitFor(() => expect(requests).toEqual(["/api/draw/sessions/test/jobs/job/save"]));
+  vi.unstubAllGlobals();
+});

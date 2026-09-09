@@ -227,7 +227,7 @@ export default defineSchema({
     state: v.union(
       v.literal("staging"), v.literal("awaiting_payment"), v.literal("admitted"),
       v.literal("submitting"), v.literal("submission_unknown"), v.literal("queued"),
-      v.literal("running"), v.literal("ready_for_delivery"), v.literal("delivered"),
+      v.literal("running"), v.literal("ready_for_save"), v.literal("ready_for_delivery"), v.literal("delivered"),
       v.literal("retryable_failure"), v.literal("failed"), v.literal("refused"),
       v.literal("cancelled"), v.literal("expired"),
     ),

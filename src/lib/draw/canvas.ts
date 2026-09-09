@@ -82,6 +82,7 @@ export function drawJobLabel(state: string | undefined): string {
     case "submitted":
     case "queued":
     case "running": return "Generating";
+    case "ready_for_save": return "Image ready";
     case "ready_for_delivery":
     case "ready":
     case "delivering": return "Sending to iMessage";

@@ -100,7 +100,7 @@ export const recoverStalled = internalMutation({
     }
 
     let expiredCreative = 0;
-    for (const state of ["awaiting_payment", "admitted", "submitting", "submission_unknown", "queued", "running", "ready_for_delivery", "retryable_failure"] as const) {
+    for (const state of ["awaiting_payment", "admitted", "submitting", "submission_unknown", "queued", "running", "ready_for_save", "ready_for_delivery", "retryable_failure"] as const) {
       const jobs = await ctx.db
         .query("creativeJobs")
         .withIndex("by_expiry", (q) => q.eq("state", state).lt("expiresAtMs", nowMs))

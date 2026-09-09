@@ -329,6 +329,72 @@ export const cancelDrawJob = internalMutation({
   },
 });
 
+export const saveDrawJob = internalMutation({
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), jobId: v.id("creativeJobs"), nowMs: v.number() },
+  returns: v.object({ saved: v.boolean(), state: v.string() }),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    const job = await ctx.db.get(args.jobId);
+    if (!session || !job || session.browserTokenHash !== args.browserTokenHash || session.status !== "active" || session.expiresAtMs <= args.nowMs || job.drawSessionId !== session._id) {
+      return { saved: false, state: "unauthorized" };
+    }
+    if (job.state === "delivered") return { saved: true, state: "delivered" };
+    if (job.state === "ready_for_delivery") {
+      await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId: job.turnId });
+      return { saved: true, state: "ready_for_delivery" };
+    }
+    if (job.state !== "ready_for_save" || !job.outputMediaId) return { saved: false, state: job.state };
+    const [turn, media] = await Promise.all([ctx.db.get(job.turnId), ctx.db.get(job.outputMediaId)]);
+    if (!turn || !media || media.deletedAtMs !== undefined || media.expiresAtMs <= args.nowMs || ["superseded", "cancelled", "failed"].includes(turn.state)) {
+      return { saved: false, state: "unavailable" };
+    }
+    const attachmentKey = `${job._id}:creative_attachment`;
+    const captionKey = `${job._id}:creative_caption`;
+    let attachment = await ctx.db.query("outboundDeliveries").withIndex("by_idempotency", q => q.eq("idempotencyKey", attachmentKey)).unique();
+    if (!attachment) {
+      const deliveryId = await ctx.db.insert("outboundDeliveries", {
+        turnId: job.turnId,
+        threadId: job.threadId,
+        stage: "creative_attachment",
+        sequence: 1,
+        itemKey: String(job._id),
+        idempotencyKey: attachmentKey,
+        payload: { mediaId: job.outputMediaId, mimeType: media.mimeType, filename: media.filename, caption: "Here’s your finished drawing." },
+        status: "pending",
+        attemptCount: 0,
+        nextAttemptAtMs: args.nowMs,
+        createdAtMs: args.nowMs,
+        updatedAtMs: args.nowMs,
+      });
+      attachment = await ctx.db.get(deliveryId);
+    }
+    const caption = await ctx.db.query("outboundDeliveries").withIndex("by_idempotency", q => q.eq("idempotencyKey", captionKey)).unique();
+    if (!caption) {
+      await ctx.db.insert("outboundDeliveries", {
+        turnId: job.turnId,
+        threadId: job.threadId,
+        stage: "creative_caption",
+        sequence: 2,
+        itemKey: `${String(job._id)}:caption`,
+        idempotencyKey: captionKey,
+        payload: { text: "Here’s your finished drawing." },
+        status: "pending",
+        attemptCount: 0,
+        nextAttemptAtMs: args.nowMs,
+        createdAtMs: args.nowMs,
+        updatedAtMs: args.nowMs,
+      });
+    }
+    if (!attachment) return { saved: false, state: "unavailable" };
+    const sequence = await nextDrawEventSequence(ctx, session._id);
+    await ctx.db.patch(job._id, { state: "ready_for_delivery", deliveryId: attachment._id, eventSequence: sequence, updatedAtMs: args.nowMs });
+    await ctx.db.insert("drawEvents", { sessionId: session._id, jobId: job._id, sequence, kind: "state", state: "ready_for_delivery", mediaId: job.outputMediaId, createdAtMs: args.nowMs });
+    await ctx.db.patch(turn._id, { state: "response_planned", completedAtMs: undefined, updatedAtMs: args.nowMs });
+    await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId: job.turnId });
+    return { saved: true, state: "ready_for_delivery" };
+  },
+});
+
 export const recordProviderSubmission = internalMutation({
   args: { ...processingOwnership, providerRequestId: v.string(), state: v.union(v.literal("queued"), v.literal("running")), nowMs: v.number() },
   returns: v.boolean(),
@@ -389,6 +455,21 @@ export const completeProcessing = internalMutation({
       createdAtMs: args.nowMs,
       expiresAtMs: args.nowMs + 24 * 60 * 60 * 1_000,
     });
+    if (job.command === "draw") {
+      if (!job.drawSessionId) throw new Error("DRAW_SESSION_MISSING");
+      const prior = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
+      const retireAtMs = args.nowMs + 15 * 60_000;
+      for (const event of prior) {
+        if (event.kind !== "preview" || !event.mediaId) continue;
+        const preview = await ctx.db.get(event.mediaId);
+        if (preview && preview.expiresAtMs > retireAtMs) await ctx.db.patch(preview._id, { expiresAtMs: retireAtMs });
+      }
+      const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
+      await ctx.db.patch(job._id, { state: "ready_for_save", outputMediaId: mediaId, completedAtMs: args.nowMs, eventSequence: sequence, updatedAtMs: args.nowMs });
+      await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "completed", state: "ready_for_save", mediaId, createdAtMs: args.nowMs });
+      await ctx.db.patch(job.drawSessionId, { latestJobId: job._id, updatedAtMs: args.nowMs });
+      return null;
+    }
     const delivery = await ctx.db.insert("outboundDeliveries", {
       turnId: job.turnId,
       threadId: job.threadId,
@@ -418,21 +499,26 @@ export const completeProcessing = internalMutation({
       updatedAtMs: args.nowMs,
     });
     await ctx.db.patch(job._id, { state: "ready_for_delivery", deliveryId: delivery, outputMediaId: mediaId, completedAtMs: args.nowMs, updatedAtMs: args.nowMs });
-    if (job.drawSessionId) {
-      const prior = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
-      const retireAtMs = args.nowMs + 15 * 60_000;
-      for (const event of prior) {
-        if (event.kind !== "preview" || !event.mediaId) continue;
-        const preview = await ctx.db.get(event.mediaId);
-        if (preview && preview.expiresAtMs > retireAtMs) await ctx.db.patch(preview._id, { expiresAtMs: retireAtMs });
-      }
-      const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
-      await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "completed", state: "ready_for_delivery", mediaId, createdAtMs: args.nowMs });
-      await ctx.db.patch(job._id, { eventSequence: sequence });
-      await ctx.db.patch(job.drawSessionId, { latestJobId: job._id, updatedAtMs: args.nowMs });
-    }
     await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId: job.turnId });
     return null;
+  },
+});
+
+export const repairLegacyDrawSaveGate = internalMutation({
+  args: { jobId: v.id("creativeJobs"), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.command !== "draw" || job.state !== "ready_for_delivery" || !job.drawSessionId || !job.outputMediaId || job.deliveredAtMs !== undefined) return false;
+    const deliveries = await ctx.db.query("outboundDeliveries").withIndex("by_turn_stage", q => q.eq("turnId", job.turnId)).collect();
+    const generated = deliveries.filter(delivery => delivery.idempotencyKey === `${job._id}:creative_attachment` || delivery.idempotencyKey === `${job._id}:creative_caption`);
+    if (generated.some(delivery => delivery.status === "sending" || delivery.status === "sent")) return false;
+    for (const delivery of generated) await ctx.db.delete(delivery._id);
+    const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
+    await ctx.db.patch(job._id, { state: "ready_for_save", deliveryId: undefined, eventSequence: sequence, updatedAtMs: args.nowMs });
+    await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "completed", state: "ready_for_save", mediaId: job.outputMediaId, createdAtMs: args.nowMs });
+    await ctx.db.patch(job.drawSessionId, { eventSequence: sequence, latestJobId: job._id, updatedAtMs: args.nowMs });
+    return true;
   },
 });
 

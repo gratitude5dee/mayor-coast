@@ -2,7 +2,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 
 export const CREATIVE_DAY_MS = 86_400_000;
-export const CREATIVE_ACTIVE_STATES = ["staging", "awaiting_payment", "admitted", "submitting", "submission_unknown", "queued", "running", "ready_for_delivery", "retryable_failure"] as const;
+export const CREATIVE_ACTIVE_STATES = ["staging", "awaiting_payment", "admitted", "submitting", "submission_unknown", "queued", "running", "ready_for_save", "ready_for_delivery", "retryable_failure"] as const;
 export type CreativeCommand = "imagine" | "zap" | "draw";
 export function creativeKind(command: CreativeCommand) { return command === "zap" ? "video" as const : "image" as const; }
 export function creativePrice(command: CreativeCommand) { return command === "zap" ? 100 : 50; }

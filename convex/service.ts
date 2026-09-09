@@ -174,6 +174,16 @@ export const cancelDrawJob: any = action({
   },
 });
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const saveDrawJob: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), jobId: v.id("creativeJobs"), nowMs: v.number() },
+  returns: v.object({ saved: v.boolean(), state: v.string() }),
+  handler: async (ctx, args) => {
+    assertServiceSecret(args.serviceSecret);
+    return await ctx.runMutation(internal.creative.saveDrawJob, { sessionId: args.sessionId, browserTokenHash: args.browserTokenHash, jobId: args.jobId, nowMs: args.nowMs });
+  },
+});
+
 // Service-authenticated deployment canary. It exercises the same Flare stream
 // used by Draw without creating a customer job or touching customer balances.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1,6 +1,7 @@
 import OpenAI, { toFile } from "openai";
 import { del, get as getPrivateBlob, put } from "@vercel/blob";
 import sharp from "sharp";
+import { runTurboDraw } from "@/lib/draw/turbo";
 import { z } from "zod";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
@@ -27,7 +28,7 @@ const inputSchema = z.object({
   command: z.literal("draw"),
   encryptedPayload: z.string().min(24),
 }).strict();
-const canarySchema = z.object({ operation: z.literal("canary"), kind: z.enum(["generate", "edit"]).default("generate") }).strict();
+const canarySchema = z.object({ operation: z.literal("canary"), kind: z.enum(["generate", "edit"]).default("generate"), mode: DrawModeSchema.default("fast") }).strict();
 
 type Outcome = "definitive" | "retryable" | "unknown";
 
@@ -73,6 +74,14 @@ export async function POST(request: Request): Promise<Response> {
     const rawInput = await request.json();
     const canary = canarySchema.safeParse(rawInput);
     if (canary.success) {
+      if (canary.data.mode === "turbo") {
+        if (!env.FAL_KEY) throw new Error("DRAW_TURBO_NOT_CONFIGURED");
+        const image = canary.data.kind === "edit" ? `data:image/png;base64,${(await sharp({ create: { width: 1024, height: 1024, channels: 3, background: "white" } }).png().toBuffer()).toString("base64")}` : undefined;
+        submitted = true;
+        const result = await runTurboDraw({ key: env.FAL_KEY, prompt: "A small abstract color study", ...(image ? { image } : {}), onSubmitted: async (id) => { providerRequestId = id; } });
+        const metadata = await sharp(result.bytes).metadata();
+        return privateJson({ status: metadata.width ? "ok" : "invalid_image", model: result.model, partials: 0, hasRequestId: Boolean(result.requestId) });
+      }
       const client = new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0, timeout: 240_000 });
       const settings = drawImageSettings("fast");
       const streamResponse = canary.data.kind === "edit"
@@ -123,6 +132,36 @@ export async function POST(request: Request): Promise<Response> {
     const imageId = typeof payload.inputMediaId === "string" ? payload.inputMediaId as Id<"creativeMedia"> : null;
     if (!imageId && !prompt) throw Object.assign(new Error("DRAW_PROMPT_REQUIRED"), { code: "DRAW_PROMPT_REQUIRED" });
 
+    if (mode === "turbo") {
+      if (!env.FAL_KEY || !process.env.BLOB_READ_WRITE_TOKEN) throw new Error("DRAW_TURBO_NOT_CONFIGURED");
+      let image: string | undefined;
+      if (imageId) {
+        const media = await getConvexHttpClient(env.CONVEX_URL).action(api.service.getCreativeMedia, { serviceSecret: env.convexServiceSecret, mediaId: imageId, nowMs: Date.now() });
+        if (!media) throw new Error("DRAW_INPUT_EXPIRED");
+        const stored = await getPrivateBlob(media.sourceUrl, { access: "private", useCache: false });
+        if (!stored) throw new Error("DRAW_INPUT_UNAVAILABLE");
+        const bytes = Buffer.from(await new Response(stored.stream).arrayBuffer());
+        image = `data:${media.mimeType};base64,${bytes.toString("base64")}`;
+      }
+      // After submission begins, uncertain failures must never release or resubmit.
+      submitted = true;
+      const result = await runTurboDraw({ key: env.FAL_KEY,
+        prompt: prompt || "Turn this sketch into a finished image. Preserve its composition and intentional details.", ...(image ? { image } : {}),
+        onSubmitted: async (id, providerModel) => {
+          providerRequestId = id;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const accepted = await getConvexHttpClient(env.CONVEX_URL).action((api.service as any).recordDrawSubmission, {
+            serviceSecret: env.convexServiceSecret, jobId: input.jobId, attemptId: input.attemptId,
+            fencingToken: input.fencingToken, providerRequestId: id, providerModel, nowMs: Date.now(),
+          });
+          if (!accepted) throw new Error("DRAW_STALE_ATTEMPT");
+        },
+      });
+      const bytes = await sharp(result.bytes, { limitInputPixels: 16_777_216 }).jpeg({ quality: 85 }).toBuffer();
+      const blob = await put(`coast/draw/${input.jobId}/final-${crypto.randomUUID()}.jpg`, bytes, { access: "private", contentType: "image/jpeg" });
+      return privateJson({ url: blob.url, mimeType: "image/jpeg", filename: "coast-draw.jpg", caption: "Here’s your finished drawing.", providerRequestId: result.requestId, providerModel: result.model });
+    }
+
     let streamResponse;
     if (imageId) {
       const media = await getConvexHttpClient(env.CONVEX_URL).action(api.service.getCreativeMedia, {
@@ -136,6 +175,7 @@ export async function POST(request: Request): Promise<Response> {
       const stored = await getPrivateBlob(media.sourceUrl, { access: "private", token: blobToken, useCache: false });
       if (!stored) throw Object.assign(new Error("DRAW_INPUT_UNAVAILABLE"), { code: "DRAW_INPUT_UNAVAILABLE" });
       const bytes = Buffer.from(await new Response(stored.stream).arrayBuffer());
+      submitted = true;
       streamResponse = await client.images.edit({
         model,
         image: await toFile(bytes, "coast-draw.png", { type: media.mimeType }),
@@ -148,6 +188,7 @@ export async function POST(request: Request): Promise<Response> {
         partial_images: settings.partialImages,
       }).withResponse();
     } else {
+      submitted = true;
       streamResponse = await client.images.generate({
         model,
         prompt,

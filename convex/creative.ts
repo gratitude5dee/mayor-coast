@@ -9,7 +9,7 @@ import { creativePollDelayMs } from "../src/lib/creative";
 
 const jobCommand = v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"));
 const reservationSource = v.union(v.literal("free"), v.literal("credit"), v.literal("payment"));
-const drawMode = v.union(v.literal("fast"), v.literal("detailed"));
+const drawMode = v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"));
 
 async function nextDrawEventSequence(ctx: MutationCtx, sessionId: Id<"drawSessions">): Promise<number> {
   const session = await ctx.db.get(sessionId);

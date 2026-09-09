@@ -234,7 +234,7 @@ export default defineSchema({
     encryptedPayload: v.string(),
     provider: v.optional(v.union(v.literal("gmi"), v.literal("fal"), v.literal("openai"))),
     drawSessionId: v.optional(v.id("drawSessions")),
-    drawMode: v.optional(v.union(v.literal("fast"), v.literal("detailed"))),
+    drawMode: v.optional(v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"))),
     providerModel: v.optional(v.string()),
     revisionKey: v.optional(v.string()),
     inputMediaId: v.optional(v.id("creativeMedia")),

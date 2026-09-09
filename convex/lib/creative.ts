@@ -68,7 +68,7 @@ export async function appendCreativeLedger(ctx: MutationCtx, args: { userId: Id<
   return true;
 }
 
-type AdmissionArgs = { userId: Id<"coastUsers">; threadId: Id<"coastThreads">; sourceMessageId: Id<"coastMessages">; turnId: Id<"coastTurns">; requestKey: string; command: CreativeCommand; encryptedPayload: string; nowMs: number; drawSessionId?: Id<"drawSessions">; drawMode?: "fast" | "detailed"; revisionKey?: string; inputMediaId?: Id<"creativeMedia">; resumeJobId?: Id<"creativeJobs"> };
+type AdmissionArgs = { userId: Id<"coastUsers">; threadId: Id<"coastThreads">; sourceMessageId: Id<"coastMessages">; turnId: Id<"coastTurns">; requestKey: string; command: CreativeCommand; encryptedPayload: string; nowMs: number; drawSessionId?: Id<"drawSessions">; drawMode?: "fast" | "detailed" | "turbo"; revisionKey?: string; inputMediaId?: Id<"creativeMedia">; resumeJobId?: Id<"creativeJobs"> };
 export type AdmissionResult = { jobId: Id<"creativeJobs">; state: string; source: "free" | "credit" | "payment"; amountCents: number };
 export async function admitCreativeJob(ctx: MutationCtx, args: AdmissionArgs): Promise<AdmissionResult> {
   const user = await ctx.db.get(args.userId);
@@ -91,7 +91,7 @@ export async function admitCreativeJob(ctx: MutationCtx, args: AdmissionArgs): P
   const jobId = existing?._id ?? await ctx.db.insert("creativeJobs", {
     userId: args.userId, threadId: args.threadId, sourceMessageId: args.sourceMessageId, turnId: args.turnId,
     requestKey: args.requestKey, command: args.command, encryptedPayload: args.encryptedPayload, reservationId,
-    ...fields, ...(args.command === "draw" ? { provider: "openai" as const } : {}),
+    ...fields, ...(args.command === "draw" ? { provider: args.drawMode === "turbo" ? "fal" as const : "openai" as const } : {}),
     ...(args.drawSessionId ? { drawSessionId: args.drawSessionId } : {}), ...(args.revisionKey ? { revisionKey: args.revisionKey } : {}),
     ...(args.drawMode ? { drawMode: args.drawMode } : {}),
     ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}), createdAtMs: args.nowMs, expiresAtMs: args.nowMs + CREATIVE_DAY_MS,

@@ -107,3 +107,8 @@ The beta uses a free Photon shared line. Do not upgrade or provision a dedicated
 The live beta has the required secure provider configuration. Credentials belong only in encrypted Vercel and Convex environment settings; never commit them, print them, include them in terminal arguments, or paste them into chat.
 
 Current implementation includes source-backed cards, calendar attachments, native clarification polls, read states, typing, Find My nearby-search and directions handoff, and durable outbound recovery. Automated refresh scraping, embeddings, public launch, and a dedicated COAST phone line remain separate milestones.
+# Draw model options
+
+Draw offers Flare Fast (low quality), Flare Detailed (medium quality), and Z-Image Turbo through Fal. Turbo uses four inference steps, one square image, the safety checker, and strength 0.6 for sketches/imports. It chooses `fal-ai/z-image/turbo/image-to-image` for canvas input and `fal-ai/z-image/turbo` for text alone. All options share the existing image allowance and credit price. Turbo publishes its final image; progressive previews remain a Flare feature.
+
+Reopening a consumed launch link recovers an existing valid session cookie. An expired or missing cookie requires a fresh `/draw` link. Generate displays preparation, prevents duplicate taps, and reports connection failures.

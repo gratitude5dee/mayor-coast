@@ -112,7 +112,7 @@ export const getDrawSession: any = action({
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const admitDrawGeneration: any = action({
-  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: v.union(v.literal("fast"), v.literal("detailed")), inputMediaId: v.optional(v.id("creativeMedia")), nowMs: v.number() },
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo")), inputMediaId: v.optional(v.id("creativeMedia")), nowMs: v.number() },
   returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
   handler: async (ctx, args) => {
     assertServiceSecret(args.serviceSecret);

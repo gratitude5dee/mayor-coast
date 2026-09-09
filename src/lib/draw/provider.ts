@@ -1,9 +1,15 @@
 import { z } from "zod";
 
-export const DrawModeSchema = z.enum(["fast", "detailed"]);
+export const DrawModeSchema = z.enum(["fast", "detailed", "turbo"]);
 export type DrawMode = z.infer<typeof DrawModeSchema>;
 
 export const DEFAULT_DRAW_MODEL = "gpt-image-2.5-flare";
+export const TURBO_DRAW_MODEL = "fal-ai/z-image/turbo";
+export function turboDrawInput(prompt: string, imageUrl?: string) {
+  return { prompt, image_size: "square_hd", num_inference_steps: 4, num_images: 1,
+    enable_safety_checker: true, output_format: "jpeg", acceleration: "regular",
+    ...(imageUrl ? { image_url: imageUrl, strength: 0.6 } : {}) };
+}
 
 export function drawImageSettings(mode: DrawMode) {
   return {

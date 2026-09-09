@@ -1,129 +1,67 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import styles from "./dashboard.module.css";
 
-const sections = {
-  jobs: "Creative jobs",
-  interactions: "Turns",
-  messages: "Messages",
-  usage: "Free usage",
-  payments: "Payments",
-  paymentEvents: "Payment events",
-  balances: "Credit balances",
-  ledger: "Credit ledger",
-  link: "Link connections",
-  deliveries: "Delivery",
-};
-type Section = keyof typeof sections;
-type Row = Record<string, string | number | null>;
-type Result = { page: Row[]; isDone: boolean; continueCursor: string; updatedAt: number };
-type AdminUser = {
-  userId: string;
-  userAddress: string | null;
-  userPhone: string | null;
-  userEmail: string | null;
-  photonLine: string | null;
-  photonPhone: string | null;
-  status: string;
-  createdAtMs: number;
-  lastSeenAtMs: number;
-  balanceCents: number;
-  activeJobId: string | null;
-};
-type UsersResult = { users: AdminUser[]; updatedAt: number };
-function label(key: string) { return key === "_id" ? "Record" : key.replace(/([A-Z])/g, " $1").replace(/At Ms$/, " at").replace(/ Cents$/, " (USD)"); }
-function display(key: string, value: Row[string]) {
-  if (value === null) return "—";
-  if (key.endsWith("Cents") && typeof value === "number") return (value / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
-  if (key.endsWith("AtMs") && typeof value === "number") return new Date(value).toLocaleString();
-  if (key.endsWith("ElapsedMs") && typeof value === "number") return `${(value / 1000).toFixed(1)}s`;
-  return String(value);
+type Identity = { userAddress: string | null; userPhone: string | null; userEmail: string | null; photonLine: string | null; photonPhone: string | null };
+type User = Identity & { userId: string; status: string; createdAtMs: number; lastSeenAtMs: number };
+type Page<T> = { page: T[]; isDone: boolean; continueCursor: string; updatedAt: number };
+type AdminRecord = Record<string, string | number | boolean | null>;
+type Summary = { user: User; imageFreeRemaining: number; videoFreeRemaining: number; creditCents: number; reservedImageCount: number; reservedVideoCount: number; reservedCreditCents: number; activeJob: AdminRecord | null; linkStatus: string | null; updatedAt: number };
+type Conversation = Identity & { threadId: string; status: string; latestInboundAtMs: number };
+type Tab = "overview" | "activity" | "generations" | "billing";
+type Status = "all" | "active" | "stopped" | "forgetting" | "forgotten";
+
+const tabs: Record<Tab, string> = { overview: "Overview", activity: "Activity", generations: "Generations", billing: "Billing" };
+const date = (value: unknown) => typeof value === "number" ? new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(value) : "—";
+const money = (value: unknown) => typeof value === "number" ? value.toLocaleString("en-US", { style: "currency", currency: "USD" }) : "—";
+const label = (value: string) => value.replace(/([A-Z])/g, " $1").replace(/^./, letter => letter.toUpperCase()).replace(/ Id$/, " ID");
+const userName = (user: User) => user.userPhone ?? user.userEmail ?? `User ${user.userId.slice(-8)}`;
+const photonName = (user: Identity) => user.photonPhone ?? (user.photonLine === "shared" ? "Shared Photon line" : user.photonLine ?? "Unavailable");
+const funding = (record: AdminRecord) => record.reservationSource === "free" ? "Free allowance" : record.reservationSource === "credit" ? "Purchased credit" : record.reservationSource === "payment" ? "Payment required" : "—";
+function generationStatus(record: AdminRecord) { const state = String(record.state ?? "unknown"); return state === "ready_for_save" ? "Ready to save in COAST Draw" : state === "ready_for_delivery" ? "Sending to iMessage" : state === "delivered" ? "Delivered to iMessage" : state === "submission_unknown" ? "Outcome unknown" : state.replaceAll("_", " "); }
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { cache: "no-store", ...init });
+  const body = await response.json() as T & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Unable to load this view.");
+  return body;
 }
-export default function AdminDashboard() {
-  const [section, setSection] = useState<Section>("jobs");
-  const [result, setResult] = useState<Result | null>(null);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [previous, setPrevious] = useState<Array<string | null>>([]);
-  const [password, setPassword] = useState("");
-  const [locked, setLocked] = useState(true);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [filter, setFilter] = useState("");
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [userId, setUserId] = useState<string | null>(null);
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const query = new URLSearchParams({ section });
-      if (cursor) query.set("cursor", cursor);
-      if (userId) query.set("userId", userId);
-      const [response, usersResponse] = await Promise.all([
-        fetch(`/api/admin/records?${query}`, { cache: "no-store", ...(signal ? { signal } : {}) }),
-        fetch("/api/admin/users", { cache: "no-store", ...(signal ? { signal } : {}) }),
-      ]);
-      if (signal?.aborted) return;
-      if (response.status === 401 || usersResponse.status === 401) { setLocked(true); setResult(null); return; }
-      if (!response.ok) throw new Error("Unable to refresh. Last successful data remains below.");
-      const body = await response.json() as Result;
-      if (usersResponse.ok) {
-        const userBody = await usersResponse.json() as UsersResult;
-        setUsers(userBody.users);
-        if (userId === null) setUserId(userBody.users[0]?.userId ?? "");
-      }
-      if (signal?.aborted) return;
-      setResult(body); setLocked(false); setError("");
-    } catch (e) { if (!signal?.aborted) setError(e instanceof Error ? e.message : "Unable to refresh"); }
-  }, [section, cursor, userId]);
+
+function CopyButton({ value }: { value: string }) { const [copied, setCopied] = useState(false); return <button className={styles.copy} onClick={async () => { await navigator.clipboard.writeText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1200); }}>{copied ? "Copied" : "Copy ID"}</button>; }
+function DetailList({ record }: { record: AdminRecord }) { return <dl className={styles.details}>{Object.entries(record).map(([key, value]) => <div key={key}><dt>{label(key)}</dt><dd>{key.endsWith("AtMs") ? date(value) : key.endsWith("Cents") ? money(value) : value === null ? "—" : String(value)}</dd></div>)}</dl>; }
+
+function RelatedRecords({ userId, section, recordId, relation, title }: { userId: string; section: "interactions" | "jobs" | "payments"; recordId: string; relation: "messages" | "deliveries" | "ledger" | "paymentEvents"; title: string }) {
+  const [records, setRecords] = useState<AdminRecord[] | null>(null); const [error, setError] = useState("");
+  async function load(open: boolean) { if (!open || records !== null || error) return; try { const data = await request<Page<AdminRecord>>(`/api/admin/records/${recordId}/related?userId=${encodeURIComponent(userId)}&section=${section}&relation=${relation}`); setRecords(data.page); } catch (cause) { setError(cause instanceof Error ? cause.message : "Unavailable"); } }
+  return <details className={styles.related} onToggle={event => void load((event.currentTarget as HTMLDetailsElement).open)}><summary>{title}</summary>{error && <p role="alert">{error}</p>}{records === null && !error && <p>Loading…</p>}{records?.length === 0 && <p>No retained records.</p>}{records?.map(record => <div className={styles.relatedRow} key={String(record._id)}><span>{String(record.state ?? record.status ?? record.kind ?? record.direction ?? "record")}</span><time>{date(record.createdAtMs ?? record.updatedAtMs)}</time></div>)}</details>;
+}
+
+function RecordCard({ record, kind, userId }: { record: AdminRecord; kind: "activity" | "generation" | "payment" | "ledger" | "link"; userId: string }) {
+  const id = String(record._id ?? ""); const state = String(record.state ?? record.status ?? record.kind ?? "record");
+  const title = kind === "activity" ? record.creativeCommand ? `Creative request · /${record.creativeCommand}` : `COAST turn · ${state}` : kind === "generation" ? `/${String(record.command ?? "creative")} · ${generationStatus(record)}` : kind === "payment" ? record.status === "succeeded" ? "Top-up complete" : `Top-up ${state}` : kind === "link" ? `Link wallet · ${state}` : `${state.replaceAll("_", " ")} · ${money(record.amountCents)}`;
+  const relation = kind === "activity" ? "deliveries" as const : kind === "generation" ? "deliveries" as const : kind === "payment" ? "paymentEvents" as const : null;
+  const section = kind === "activity" ? "interactions" as const : kind === "generation" ? "jobs" as const : kind === "payment" ? "payments" as const : null;
+  return <article className={styles.record}><div className={styles.recordTop}><div><strong>{title}</strong><p>{date(record.createdAtMs ?? record.updatedAtMs ?? record.admittedAtMs)}</p></div><span className={`${styles.badge} ${styles[`badge_${state}`] ?? ""}`}>{kind === "generation" ? funding(record) : state}</span></div>{kind === "generation" && <p className={styles.meta}>{record.provider ? `${String(record.provider)}${record.providerModel ? ` · ${String(record.providerModel)}` : ""}` : "Provider pending"}{record.drawMode ? ` · ${String(record.drawMode)}` : ""}</p>}{kind === "payment" && <p className={styles.meta}>{record.paymentPath === "checkout" ? "Hosted Checkout" : "Connected Link"} · {money(record.chargeCents)} charged · {money(record.creditCents)} credit</p>}<details><summary>Record details</summary><DetailList record={record} /><CopyButton value={id} />{relation && section && <RelatedRecords userId={userId} section={section} recordId={id} relation={relation} title={relation === "deliveries" ? "Delivery attempts" : "Verified payment events"} />}{kind === "generation" && <RelatedRecords userId={userId} section="jobs" recordId={id} relation="ledger" title="Credit ledger" />}{kind === "payment" && <RelatedRecords userId={userId} section="payments" recordId={id} relation="ledger" title="Credit ledger" />}</details></article>;
+}
+function RecordList({ records, loading, empty, children }: { records: AdminRecord[]; loading: boolean; empty: string; children: (record: AdminRecord) => ReactNode }) { if (loading && !records.length) return <p className={styles.state}>Loading records…</p>; if (!records.length) return <p className={styles.state}>{empty}</p>; return <div className={styles.records}>{records.map(record => <div key={String(record._id)}>{children(record)}</div>)}</div>; }
+
+function Profile({ userId, onBack }: { userId: string; onBack: () => void }) {
+  const router = useRouter(); const [tab, setTab] = useState<Tab>("overview"); const [summary, setSummary] = useState<Summary | null>(null); const [conversations, setConversations] = useState<Conversation[]>([]); const [conversation, setConversation] = useState(""); const [records, setRecords] = useState<AdminRecord[]>([]); const [billing, setBilling] = useState<{ payments: AdminRecord[]; ledger: AdminRecord[]; link: AdminRecord[] }>({ payments: [], ledger: [], link: [] }); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const requestVersion = useRef(0);
+  const load = useCallback(async () => { const version = ++requestVersion.current; setLoading(true); setError(""); try { const summaryData = await request<Summary>(`/api/admin/users/${userId}/summary`); if (version !== requestVersion.current) return; setSummary(summaryData); const conversationsData = await request<Page<Conversation> & { conversations: Conversation[] }>(`/api/admin/users/${userId}/conversations`); if (version !== requestVersion.current) return; setConversations(conversationsData.conversations); if (tab === "overview") { setRecords([]); return; } const query = new URLSearchParams({ userId, section: tab === "activity" ? "interactions" : tab === "generations" ? "jobs" : "payments" }); if (tab === "activity" && conversation) query.set("threadId", conversation); const current = await request<Page<AdminRecord>>(`/api/admin/records?${query}`); if (version !== requestVersion.current) return; setRecords(current.page); if (tab === "billing") { const [ledger, link] = await Promise.all([request<Page<AdminRecord>>(`/api/admin/records?userId=${encodeURIComponent(userId)}&section=ledger`), request<Page<AdminRecord>>(`/api/admin/records?userId=${encodeURIComponent(userId)}&section=link`)]); if (version === requestVersion.current) setBilling({ payments: current.page, ledger: ledger.page, link: link.page }); } } catch (cause) { if (version === requestVersion.current) setError(cause instanceof Error ? cause.message : "Unable to load this user."); } finally { if (version === requestVersion.current) setLoading(false); } }, [conversation, tab, userId]);
   useEffect(() => {
-    const controller = new AbortController();
-    const initial = window.setTimeout(() => void refresh(controller.signal), 0);
-    const timer = setInterval(() => void refresh(controller.signal), 15_000);
-    return () => { controller.abort(); clearTimeout(initial); clearInterval(timer); };
-  }, [refresh]);
-  async function login(event: React.FormEvent) {
-    event.preventDefault(); setBusy(true); setError("");
-    try {
-      const response = await fetch("/api/admin/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
-      if (!response.ok) { setError("Access key not accepted, or login is unavailable."); return; }
-      setPassword(""); await refresh();
-    } catch { setError("Couldn’t connect. Try again."); }
-    finally { setBusy(false); }
-  }
-  const rows = (result?.page ?? []).filter((row) => Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(filter.toLowerCase())));
-  const columns = Object.keys(result?.page[0] ?? {});
-  const selectedUser = users.find((user) => user.userId === userId);
-  const userName = (user: AdminUser) => user.userPhone ?? user.userEmail ?? `User ${user.userId.slice(-8)}`;
-  const photonName = (user: AdminUser) => user.photonPhone ?? (user.photonLine === "shared" ? "Photon shared line" : user.photonLine ?? "Photon line unavailable");
-  return <main className={styles.shell}>
-    <header className={styles.header}><div><p className={styles.eyebrow}>COAST / OPERATIONS</p><h1>A clear view of the coast.</h1><p>Activity, generation, and account health.</p></div>{!locked && <button onClick={async () => { const response = await fetch("/api/admin/session", { method: "DELETE" }); if (response.ok) { setLocked(true); setResult(null); } }}>Sign out</button>}</header>
-    {locked ? <form onSubmit={login} className={styles.login}><h2>Admin access</h2><p>Enter your private operations access key. Sessions last eight hours; repeated failed attempts are rate limited.</p><label>Access key<input type="password" minLength={4} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label><button disabled={busy}>{busy ? "Signing in…" : "Open dashboard"}</button><p role="alert">{error}</p></form> : <>
-      <nav className={styles.nav}>{Object.entries(sections).map(([key, name]) => <button key={key} aria-current={section === key ? "page" : undefined} onClick={() => { setSection(key as Section); setCursor(null); setPrevious([]); setFilter(""); setResult(null); }}>{name}</button>)}</nav>
-      <section className={styles.userBar}>
-        <label>User
-          <select value={userId ?? ""} onChange={(event) => { setUserId(event.target.value); setCursor(null); setPrevious([]); setResult(null); }}>
-            <option value="">All users</option>
-            {users.map((user) => <option key={user.userId} value={user.userId}>{userName(user)} · {photonName(user)}</option>)}
-          </select>
-        </label>
-        {selectedUser ? <dl>
-          <div><dt>User</dt><dd>{userName(selectedUser)}</dd></div>
-          <div><dt>Photon line</dt><dd>{photonName(selectedUser)}</dd></div>
-          <div><dt>Status</dt><dd>{selectedUser.status}</dd></div>
-          <div><dt>Last active</dt><dd>{new Date(selectedUser.lastSeenAtMs).toLocaleString()}</dd></div>
-          <div><dt>Purchased balance</dt><dd>{display("balanceCents", selectedUser.balanceCents)}</dd></div>
-        </dl> : <p>Showing records across all users.</p>}
-      </section>
-      <section className={styles.cards}><article><span>View</span><strong>{sections[section]}</strong><small>Newest records first</small></article><article><span>Records on this page</span><strong>{result?.page.length ?? "…"}</strong><small>Browse older records below</small></article><article><span>Last refreshed</span><strong>{result ? new Date(result.updatedAt).toLocaleTimeString() : "Loading…"}</strong><small>Refreshes every 15 seconds</small></article></section>
-      <section className={styles.panel}><div className={styles.controls}><h2>{sections[section]}</h2><input aria-label="Filter current page" placeholder="Filter this page by user, state, or ID…" value={filter} onChange={(e) => setFilter(e.target.value)} /><button onClick={() => void refresh()}>Refresh</button></div>
-        {section === "messages" && <p>Message metadata only. The dashboard excludes message bodies and provider message identifiers.</p>}
-        {section === "usage" && <p>Each row is one reserved free generation. Image usage is shared by /draw and /imagine; video usage belongs to /zap.</p>}
-        {section === "payments" && <p>Payment path is the recorded COAST order path. A Checkout order may have been paid using Link inside Stripe Checkout; it does not prove a connected-wallet purchase.</p>}
-        {section === "paymentEvents" && <p>Verified Stripe events used for idempotent settlement. Event and payment identities are operational references, not payment credentials.</p>}
-        {section === "balances" && <p>Available purchased balance from credit accounts. Reservations and reversals are recorded in the ledger. Free usage is tracked separately from purchased credit.</p>}
-        {section === "link" && <p>Connection status does not confirm that merchant wallet charging is enabled or that a purchase was approved.</p>}
-        {error && <p role="alert">{error}</p>}
-        <div className={styles.table}><table><thead><tr>{columns.map((key) => <th key={key}>{label(key)}</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={String(row._id)}>{columns.map((key) => <td key={key} title={String(row[key] ?? "")}>{display(key, row[key] ?? null)}</td>)}</tr>)}</tbody></table>{!result ? <p>Loading records…</p> : !rows.length && <p>No records match this view.</p>}</div>
-        <footer className={styles.controls}><button disabled={!previous.length} onClick={() => { setCursor(previous.at(-1) ?? null); setPrevious((value) => value.slice(0, -1)); setResult(null); }}>Previous</button><span>Page {previous.length + 1} · Up to 50 records per page</span><button disabled={!result || result.isDone} onClick={() => { if (result) { setPrevious((value) => [...value, cursor]); setCursor(result.continueCursor); setResult(null); } }}>Older records</button></footer>
-      </section><p className={styles.footnote}>Private operational records · Amounts in USD · User and Photon addresses appear only in the authenticated user view; prompts, message contents, media, and wallet credentials are excluded.</p>
-    </>}
-  </main>;
+    const initial = window.setTimeout(() => void load(), 0);
+    const timer = window.setInterval(() => void load(), 15_000);
+    return () => { requestVersion.current += 1; window.clearTimeout(initial); window.clearInterval(timer); };
+  }, [load]);
+  if (loading && !summary) return <section className={styles.profile}><p className={styles.state}>Loading user records…</p></section>; if (error && !summary) return <section className={styles.profile}><p role="alert" className={styles.state}>{error}</p><button onClick={onBack}>Back to users</button></section>; if (!summary) return null;
+  return <section className={styles.profile} aria-live="polite"><button className={styles.back} onClick={onBack}>← All users</button><header className={styles.profileHeader}><div><p className={styles.eyebrow}>USER PROFILE</p><h2>{userName(summary.user)}</h2><p>{photonName(summary.user)} · {summary.user.status}</p></div><button onClick={() => void load()}>Refresh</button></header><dl className={styles.identity}><div><dt>Joined</dt><dd>{date(summary.user.createdAtMs)}</dd></div><div><dt>Last active</dt><dd>{date(summary.user.lastSeenAtMs)}</dd></div><div><dt>Conversations</dt><dd>{conversations.length}</dd></div><div><dt>Link</dt><dd>{summary.linkStatus ?? "Not connected"}</dd></div></dl><nav className={styles.tabs} aria-label="User records">{(Object.keys(tabs) as Tab[]).map(name => <button key={name} aria-current={tab === name ? "page" : undefined} onClick={() => { setTab(name); setRecords([]); router.replace(`/admin/users/${userId}`); }}>{tabs[name]}</button>)}</nav>{tab === "overview" && <><div className={styles.metrics}><article><span>Available credit</span><strong>{money(summary.creditCents)}</strong><small>{summary.reservedCreditCents ? `${money(summary.reservedCreditCents)} reserved` : "No credit reserved"}</small></article><article><span>Free images</span><strong>{summary.imageFreeRemaining} / 10</strong><small>{summary.reservedImageCount ? `${summary.reservedImageCount} unresolved reservation${summary.reservedImageCount === 1 ? "" : "s"}` : "Rolling 24-hour allowance"}</small></article><article><span>Free videos</span><strong>{summary.videoFreeRemaining} / 10</strong><small>{summary.reservedVideoCount ? `${summary.reservedVideoCount} unresolved reservation${summary.reservedVideoCount === 1 ? "" : "s"}` : "Rolling 24-hour allowance"}</small></article></div><section className={styles.active}><h3>Current creative request</h3>{summary.activeJob ? <RecordCard record={summary.activeJob} kind="generation" userId={userId} /> : <p>No active creative request.</p>}</section></>}{tab === "activity" && <><div className={styles.filters}><label>Conversation<select value={conversation} onChange={event => setConversation(event.target.value)}><option value="">All conversations</option>{conversations.map(item => <option key={item.threadId} value={item.threadId}>{photonName(item)} · {date(item.latestInboundAtMs)}</option>)}</select></label></div><RecordList records={records} loading={loading} empty="No retained activity matches this view.">{record => <RecordCard record={record} kind="activity" userId={userId} />}</RecordList></>}{tab === "generations" && <RecordList records={records} loading={loading} empty="No creative generations yet.">{record => <RecordCard record={record} kind="generation" userId={userId} />}</RecordList>}{tab === "billing" && <div className={styles.billing}><section><h3>Top-ups</h3><RecordList records={billing.payments} loading={loading} empty="No top-ups.">{record => <RecordCard record={record} kind="payment" userId={userId} />}</RecordList></section><section><h3>Credit ledger</h3><RecordList records={billing.ledger} loading={loading} empty="No ledger entries.">{record => <RecordCard record={record} kind="ledger" userId={userId} />}</RecordList></section><section><h3>Link wallet</h3>{billing.link[0] ? <RecordCard record={billing.link[0]} kind="link" userId={userId} /> : <p>No connected Link wallet.</p>}</section></div>}{error && <p role="alert" className={styles.warning}>{error}</p>}</section>;
+}
+
+export default function AdminDashboard({ initialUserId }: { initialUserId?: string }) {
+  const router = useRouter(); const [users, setUsers] = useState<User[]>([]); const [selected, setSelected] = useState(initialUserId ?? ""); const [status, setStatus] = useState<Status>("all"); const [cursor, setCursor] = useState<string | null>(null); const [previous, setPrevious] = useState<Array<string | null>>([]); const [directory, setDirectory] = useState<Page<User> | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [query, setQuery] = useState(""); const [searching, setSearching] = useState(false); const [locked, setLocked] = useState(false);
+  const loadUsers = useCallback(async () => { setLoading(true); setError(""); try { const params = new URLSearchParams(); if (status !== "all") params.set("status", status); if (cursor) params.set("cursor", cursor); const data = await request<Page<User> & { users: User[] }>(`/api/admin/users?${params}`); setDirectory(data); setUsers(data.users); if (!selected && data.users[0]) setSelected(data.users[0].userId); } catch (cause) { const message = cause instanceof Error ? cause.message : "Unable to load users."; setError(message); if (message === "Sign in required") setLocked(true); } finally { setLoading(false); } }, [cursor, selected, status]);
+  useEffect(() => { const initial = window.setTimeout(() => void loadUsers(), 0); return () => window.clearTimeout(initial); }, [loadUsers]); function choose(userId: string) { setSelected(userId); router.push(`/admin/users/${userId}`); } async function search(event: React.FormEvent) { event.preventDefault(); if (!query.trim()) return; setSearching(true); setError(""); try { const data = await request<{ user: User | null }>("/api/admin/users/search", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query }) }); if (!data.user) { setError("No matching user."); return; } choose(data.user.userId); } catch (cause) { setError(cause instanceof Error ? cause.message : "Search unavailable."); } finally { setSearching(false); } }
+  if (locked) return <main className={styles.shell}><p className={styles.state}>Your admin session expired. Reload this page to sign in again.</p></main>; return <main className={styles.shell}><header className={styles.header}><div><p className={styles.eyebrow}>COAST / OPERATIONS</p><h1>Users, not loose records.</h1><p>Live account health, creative activity, and billing in one place.</p></div><button onClick={async () => { await fetch("/api/admin/session", { method: "DELETE" }); setLocked(true); }}>Sign out</button></header><div className={styles.layout}><aside className={`${styles.directory} ${selected ? styles.directoryHiddenMobile : ""}`}><div className={styles.directoryTop}><div><h2>Users</h2><p>Most recently active first</p></div><button onClick={() => void loadUsers()}>Refresh</button></div><form className={styles.search} onSubmit={search}><label>Find a user<input value={query} onChange={event => setQuery(event.target.value)} placeholder="Full phone, email, or user ID" /></label><button disabled={searching}>{searching ? "Finding…" : "Find"}</button></form><label className={styles.status}>Status<select value={status} onChange={event => { setStatus(event.target.value as Status); setCursor(null); setPrevious([]); }}><option value="all">All users</option><option value="active">Active</option><option value="stopped">Stopped</option><option value="forgetting">Forgetting</option><option value="forgotten">Forgotten</option></select></label>{loading && !users.length ? <p className={styles.state}>Loading users…</p> : users.length ? <ol className={styles.userList}>{users.map(user => <li key={user.userId}><button className={selected === user.userId ? styles.selected : ""} aria-current={selected === user.userId ? "page" : undefined} onClick={() => choose(user.userId)}><strong>{userName(user)}</strong><span>{photonName(user)}</span><time>{date(user.lastSeenAtMs)}</time></button></li>)}</ol> : <p className={styles.state}>{status === "all" ? "No users yet." : "No users match this status."}</p>}<footer className={styles.pager}><button disabled={!previous.length} onClick={() => { setCursor(previous.at(-1) ?? null); setPrevious(value => value.slice(0, -1)); }}>Newer</button><span>{directory ? `Page ${previous.length + 1}` : ""}</span><button disabled={!directory || directory.isDone} onClick={() => { if (directory) { setPrevious(value => [...value, cursor]); setCursor(directory.continueCursor); } }}>Older</button></footer></aside><div className={styles.profileWrap}>{selected ? <Profile key={selected} userId={selected} onBack={() => { setSelected(""); router.push("/admin"); }} /> : <section className={styles.empty}><h2>Choose a user</h2><p>Select someone from the directory to see their COAST activity, generations, and billing.</p></section>}</div></div>{error && <p role="alert" className={styles.warning}>{error}</p>}<p className={styles.footnote}>Private operations data · refreshes every 15 seconds · message bodies, prompts, media, payment URLs, and credentials never reach this dashboard.</p></main>;
 }

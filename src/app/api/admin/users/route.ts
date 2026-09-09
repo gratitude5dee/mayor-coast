@@ -1,32 +1,24 @@
-import { cookies } from "next/headers";
-
 import { api } from "../../../../../convex/_generated/api";
-import { adminIdentityFromEncryptedThreadRef } from "@/lib/admin-identities";
-import { ADMIN_COOKIE, validAdminSession } from "@/lib/admin-auth";
-import { getConvexHttpClient } from "@/lib/convex";
-import { parseServerEnv } from "@/lib/env";
+import { adminError, adminRequest } from "@/lib/admin-route";
+import { adminUserView } from "@/lib/admin-view";
 import { privateJson } from "@/lib/security/internal-auth";
+import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+const statuses = z.enum(["active", "stopped", "forgetting", "forgotten"]);
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const env = parseServerEnv();
-    if (!validAdminSession((await cookies()).get(ADMIN_COOKIE)?.value, env.convexServiceSecret)) {
-      return privateJson({ error: "Sign in required" }, { status: 401 });
-    }
-    const users = await getConvexHttpClient(env.CONVEX_URL).query(api.admin.users, {
-      serviceSecret: env.convexServiceSecret,
+    const admin = await adminRequest();
+    if (!admin) return privateJson({ error: "Sign in required" }, { status: 401 });
+    const url = new URL(request.url);
+    const status = statuses.optional().parse(url.searchParams.get("status") ?? undefined);
+    const result = await admin.client.query(api.admin.directory, {
+      serviceSecret: admin.env.convexServiceSecret,
+      ...(status ? { status } : {}),
+      paginationOpts: { numItems: 25, cursor: url.searchParams.get("cursor") },
     });
-    return privateJson({
-      users: users.map(({ encryptedThreadRef, ...user }) => ({
-        ...user,
-        ...adminIdentityFromEncryptedThreadRef(encryptedThreadRef, env.convexServiceSecret),
-      })),
-      updatedAt: Date.now(),
-    });
-  } catch {
-    return privateJson({ error: "Users unavailable" }, { status: 503 });
-  }
+    return privateJson({ ...result, users: result.page.map(user => adminUserView(user, admin.env.convexServiceSecret)), updatedAt: Date.now() });
+  } catch (error) { return adminError(error, "Users unavailable"); }
 }

@@ -1,3 +1,4 @@
+import { insertOwnedDelivery } from "./lib/adminOwnership";
 import { makeFunctionReference } from "convex/server";
 import { v } from "convex/values";
 
@@ -632,7 +633,7 @@ export const runDue = internalMutation({
       },
     ];
     for (const [sequence, delivery] of deliveries.entries()) {
-      await ctx.db.insert("outboundDeliveries", {
+      await insertOwnedDelivery(ctx, {
         turnId: proactiveTurnId,
         threadId: checkIn.threadId,
         stage: delivery.stage,

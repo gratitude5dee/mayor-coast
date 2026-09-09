@@ -1,3 +1,4 @@
+import { insertOwnedDelivery } from "./lib/adminOwnership";
 import { v } from "convex/values";
 
 import type { Id } from "./_generated/dataModel";
@@ -54,7 +55,7 @@ export const addTopupCredit = internalMutation({
     const existing = await ctx.db.query("creativePaymentEvents").withIndex("by_payment", (q) => q.eq("paymentIdentity", args.paymentIdentity)).first();
     const existingEvent = await ctx.db.query("creativePaymentEvents").withIndex("by_event", (q) => q.eq("eventId", args.eventId)).first();
     if (existing !== null || existingEvent !== null) return false;
-    await ctx.db.insert("creativePaymentEvents", { eventId: args.eventId, paymentIdentity: args.paymentIdentity, orderId: args.orderId, createdAtMs: args.nowMs });
+    await ctx.db.insert("creativePaymentEvents", { userId: order.userId, eventId: args.eventId, paymentIdentity: args.paymentIdentity, orderId: args.orderId, createdAtMs: args.nowMs });
     await ctx.db.insert("creativeCreditLedger", { userId: order.userId, topupOrderId: args.orderId, kind: "topup", amountCents: 1_000, idempotencyKey: `topup:${args.orderId}`, createdAtMs: args.nowMs });
     const account = await ctx.db.query("creativeCreditAccounts").withIndex("by_user", (q) => q.eq("userId", order.userId)).unique();
     if (account === null) await ctx.db.insert("creativeCreditAccounts", { userId: order.userId, balanceCents: 1_000, updatedAtMs: args.nowMs });
@@ -80,7 +81,7 @@ export const reverseTopupCredit = internalMutation({
     if (order === null || order.status === "refunded") return false;
     const existingEvent = await ctx.db.query("creativePaymentEvents").withIndex("by_event", (q) => q.eq("eventId", args.eventId)).first();
     if (existingEvent !== null) return false;
-    await ctx.db.insert("creativePaymentEvents", { eventId: args.eventId, paymentIdentity: args.paymentIdentity, orderId: args.orderId, createdAtMs: args.nowMs });
+    await ctx.db.insert("creativePaymentEvents", { userId: order.userId, eventId: args.eventId, paymentIdentity: args.paymentIdentity, orderId: args.orderId, createdAtMs: args.nowMs });
     await ctx.db.insert("creativeCreditLedger", { userId: order.userId, topupOrderId: args.orderId, kind: "refund", amountCents: -1_000, idempotencyKey: `refund:${args.orderId}`, createdAtMs: args.nowMs });
     const account = await ctx.db.query("creativeCreditAccounts").withIndex("by_user", (q) => q.eq("userId", order.userId)).unique();
     if (account !== null) await ctx.db.patch(account._id, { balanceCents: account.balanceCents - 1_000, updatedAtMs: args.nowMs });
@@ -352,7 +353,7 @@ export const saveDrawJob = internalMutation({
     const captionKey = `${job._id}:creative_caption`;
     let attachment = await ctx.db.query("outboundDeliveries").withIndex("by_idempotency", q => q.eq("idempotencyKey", attachmentKey)).unique();
     if (!attachment) {
-      const deliveryId = await ctx.db.insert("outboundDeliveries", {
+      const deliveryId = await insertOwnedDelivery(ctx, {
         turnId: job.turnId,
         threadId: job.threadId,
         stage: "creative_attachment",
@@ -370,7 +371,7 @@ export const saveDrawJob = internalMutation({
     }
     const caption = await ctx.db.query("outboundDeliveries").withIndex("by_idempotency", q => q.eq("idempotencyKey", captionKey)).unique();
     if (!caption) {
-      await ctx.db.insert("outboundDeliveries", {
+      await insertOwnedDelivery(ctx, {
         turnId: job.turnId,
         threadId: job.threadId,
         stage: "creative_caption",
@@ -470,7 +471,7 @@ export const completeProcessing = internalMutation({
       await ctx.db.patch(job.drawSessionId, { latestJobId: job._id, updatedAtMs: args.nowMs });
       return null;
     }
-    const delivery = await ctx.db.insert("outboundDeliveries", {
+    const delivery = await insertOwnedDelivery(ctx, {
       turnId: job.turnId,
       threadId: job.threadId,
       stage: "creative_attachment",
@@ -484,7 +485,7 @@ export const completeProcessing = internalMutation({
       createdAtMs: args.nowMs,
       updatedAtMs: args.nowMs,
     });
-    await ctx.db.insert("outboundDeliveries", {
+    await insertOwnedDelivery(ctx, {
       turnId: job.turnId,
       threadId: job.threadId,
       stage: "creative_caption",
@@ -582,7 +583,7 @@ export const releaseLegacyUnknown = internalMutation({
       .withIndex("by_idempotency", (q) => q.eq("idempotencyKey", `${job._id}:legacy_unknown_status`))
       .unique();
     if (!existing) {
-      await ctx.db.insert("outboundDeliveries", {
+      await insertOwnedDelivery(ctx, {
         turnId: job.turnId,
         threadId: job.threadId,
         stage: "creative_status",

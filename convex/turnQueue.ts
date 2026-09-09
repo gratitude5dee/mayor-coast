@@ -1,3 +1,4 @@
+import { insertOwnedDelivery } from "./lib/adminOwnership";
 import { v } from "convex/values";
 
 import type { Doc } from "./_generated/dataModel";
@@ -877,7 +878,7 @@ export const persistPlan = internalMutation({
         .withIndex("by_idempotency", (q) => q.eq("idempotencyKey", idempotencyKey))
         .unique();
       if (existing === null) {
-        await ctx.db.insert("outboundDeliveries", {
+        await insertOwnedDelivery(ctx, {
           turnId: turn._id,
           threadId: turn.threadId,
           stage: stage.stage,

@@ -58,11 +58,13 @@ Creative deployment settings are `COAST_CREATIVE_RUNTIME_URL`, `COAST_DRAW_RUNTI
 
 ## Operations dashboard
 
-The private dashboard at `/admin` shows paginated creative jobs, turn and message metadata, free-usage reservations, top-up orders, payment-event deduplication records, purchased balances, ledger entries, Link connection status, and outbound delivery state. It refreshes every 15 seconds. Record tables use a fixed allowlist: prompts, message bodies, private media, checkout URLs, and wallet credentials never reach the browser. The authenticated user header may show the user address and originating Photon line as described below.
+The private dashboard at `/admin` is organized around a searchable, paginated user directory. Select a person to open a refresh-safe profile at `/admin/users/[userId]`. Profiles show four tabs: **Overview**, **Activity**, **Generations**, and **Billing**. The overview presents purchased credit, independent free image/video allowance, unresolved reservations, and any active creative request. Activity can be narrowed to one verified conversation; generations show command, model/mode, funding source, delivery state, and outcome; billing groups Checkout or connected-Link purchases with their ledger and payment events. Visible data refreshes every 15 seconds without changing the selected user or pagination.
 
 Access uses an eight-hour Secure, HttpOnly session. Store only the SHA-256 hash of the access key in the production Convex environment as `COAST_ADMIN_PASSWORD_HASH`. Login attempts are rate limited per client. Rotate the key by replacing that hash; existing browser sessions expire independently after eight hours.
 
-The user selector groups jobs, interactions, usage, payments, balances, ledger entries, Link state, and delivery records by COAST user. The authenticated user summary decrypts the latest verified iMessage thread reference in the Vercel route so operators can see the user phone or email and the originating Photon line. Convex and the dashboard record tables continue to use pseudonymous user IDs, and a Photon `shared` line is labeled as shared rather than represented as a phone number.
+The authenticated Vercel routes decrypt a verified iMessage thread reference only to format the user phone/email and originating Photon line for an operator. Convex and browser record views use pseudonymous user IDs. A Photon `shared` line is labeled as shared rather than represented as a phone number. All record filters apply on the server before pagination, including delivery and payment-event ownership, so records do not disappear when newer activity belongs to someone else.
+
+The dashboard is deliberately read-only. Its view models are allowlisted: prompts, message bodies, private media, checkout URLs, wallet credentials, encrypted payloads, and raw identity references never reach the browser. Expandable details contain only technical IDs, timestamps, and sanitized error codes.
 
 ## Fixed dataset
 
@@ -93,7 +95,9 @@ pnpm snapshot:import -- --prod --yes
 - `POST /api/internal/delivery` — service-authenticated Photon delivery bridge.
 - `GET /api/stripe/creative-topup?order_id=...` — fixed $9.99 Checkout redirect for a server-owned order.
 - `POST /api/stripe/webhook` — raw-body verified Stripe settlement endpoint.
-- `POST /api/admin/session` and `GET /api/admin/records` — same-origin login and authenticated, privacy-projected operations data.
+- `POST /api/admin/session` — same-origin, rate-limited admin login.
+- `GET /api/admin/users`, `POST /api/admin/users/search`, and `GET /api/admin/users/:userId/summary` — authenticated directory, exact identity lookup, and privacy-projected profile summary.
+- `GET /api/admin/users/:userId/conversations`, `GET /api/admin/records`, and `GET /api/admin/records/:recordId/related` — authenticated, server-filtered profile activity and on-demand record details.
 
 The webhook is a Node route. The Photon adapter verifies the exact raw request body and its five-minute signature window. Convex claims every delivery before any acknowledgment or generation work.
 

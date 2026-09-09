@@ -212,6 +212,8 @@ export default defineSchema({
     forgottenAtMs: v.optional(v.number()),
   })
     .index("by_sender_hash", ["senderHash"])
+    .index("by_last_seen", ["lastSeenAtMs"])
+    .index("by_status_last_seen", ["status", "lastSeenAtMs"])
     .index("by_status_updated", ["status", "updatedAtMs"]),
 
   // Creative state is deliberately separate from concierge turns. Payloads
@@ -357,6 +359,8 @@ export default defineSchema({
     createdAtMs: v.number(),
   })
     .index("by_idempotency", ["idempotencyKey"])
+    .index("by_job_created", ["jobId", "createdAtMs"])
+    .index("by_order_created", ["topupOrderId", "createdAtMs"])
     .index("by_user_created", ["userId", "createdAtMs"]),
 
   creativeTopups: defineTable({
@@ -385,13 +389,16 @@ export default defineSchema({
   }).index("by_client", ["clientHash"]),
 
   creativePaymentEvents: defineTable({
+    userId: v.optional(v.id("coastUsers")),
     eventId: v.string(),
     paymentIdentity: v.string(),
     orderId: v.string(),
     createdAtMs: v.number(),
   })
     .index("by_event", ["eventId"])
-    .index("by_payment", ["paymentIdentity"]),
+    .index("by_payment", ["paymentIdentity"])
+    .index("by_user_created", ["userId", "createdAtMs"])
+    .index("by_order_created", ["orderId", "createdAtMs"]),
 
   creativeLinkConnections: defineTable({
     userId: v.id("coastUsers"),
@@ -548,6 +555,7 @@ export default defineSchema({
     updatedAtMs: v.number(),
   })
     .index("by_thread_state_updated", ["threadId", "state", "updatedAtMs"])
+    .index("by_user_created", ["userId", "createdAtMs"])
     .index("by_user_updated", ["userId", "updatedAtMs"])
     .index("by_user_privacy_redacted", ["userId", "privacyRedactedAtMs"])
     .index("by_state_updated", ["state", "updatedAtMs"]),
@@ -679,6 +687,7 @@ export default defineSchema({
     .index("by_user", ["userId"]),
 
   outboundDeliveries: defineTable({
+    userId: v.optional(v.id("coastUsers")),
     turnId: v.id("coastTurns"),
     threadId: v.id("coastThreads"),
     stage: outboundStage,
@@ -698,6 +707,8 @@ export default defineSchema({
   })
     .index("by_idempotency", ["idempotencyKey"])
     .index("by_status_next_attempt", ["status", "nextAttemptAtMs"])
+    .index("by_user_created", ["userId", "createdAtMs"])
+    .index("by_turn_created", ["turnId", "createdAtMs"])
     .index("by_turn_stage", ["turnId", "stage"])
     .index("by_turn_sequence", ["turnId", "sequence"]),
 

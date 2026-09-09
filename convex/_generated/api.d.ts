@@ -18,6 +18,7 @@ import type * as dataset from "../dataset.js";
 import type * as http from "../http.js";
 import type * as imports from "../imports.js";
 import type * as inbound from "../inbound.js";
+import type * as lib_adminOwnership from "../lib/adminOwnership.js";
 import type * as lib_creative from "../lib/creative.js";
 import type * as lib_pollMatching from "../lib/pollMatching.js";
 import type * as lib_service_auth from "../lib/service_auth.js";
@@ -50,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   imports: typeof imports;
   inbound: typeof inbound;
+  "lib/adminOwnership": typeof lib_adminOwnership;
   "lib/creative": typeof lib_creative;
   "lib/pollMatching": typeof lib_pollMatching;
   "lib/service_auth": typeof lib_service_auth;

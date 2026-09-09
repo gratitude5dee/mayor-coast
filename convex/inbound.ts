@@ -1,3 +1,4 @@
+import { insertOwnedDelivery } from "./lib/adminOwnership";
 import { v } from "convex/values";
 
 import type { Id } from "./_generated/dataModel";
@@ -537,7 +538,7 @@ export const claimDelivery = internalMutation({
         createdAtMs: args.receivedAtMs,
         updatedAtMs: args.receivedAtMs,
       });
-      await ctx.db.insert("outboundDeliveries", {
+      await insertOwnedDelivery(ctx, {
         turnId,
         threadId,
         stage: "response",
@@ -653,7 +654,7 @@ export const claimDelivery = internalMutation({
         },
       ];
       for (const [sequence, stage] of stages.entries()) {
-        await ctx.db.insert("outboundDeliveries", {
+        await insertOwnedDelivery(ctx, {
           turnId,
           threadId,
           stage: stage.stage,
@@ -702,7 +703,7 @@ export const claimDelivery = internalMutation({
           },
           updatedAtMs: args.receivedAtMs,
         });
-        await ctx.db.insert("outboundDeliveries", {
+        await insertOwnedDelivery(ctx, {
           turnId,
           threadId,
           stage: "response",
@@ -816,7 +817,7 @@ export const claimDelivery = internalMutation({
       command === "none"
     ) {
       if (creativeCommand === "draw" && process.env.COAST_DRAW_ENABLED !== "true") {
-        await ctx.db.insert("outboundDeliveries", {
+        await insertOwnedDelivery(ctx, {
           turnId,
           threadId,
           stage: "response",
@@ -843,7 +844,7 @@ export const claimDelivery = internalMutation({
         nowMs: args.receivedAtMs,
       });
       if (admitted.state === "busy") {
-        await ctx.db.insert("outboundDeliveries", {
+        await insertOwnedDelivery(ctx, {
           turnId,
           threadId,
           stage: "response",
@@ -861,7 +862,7 @@ export const claimDelivery = internalMutation({
       } else if (admitted.state === "awaiting_payment") {
         const noun = creativeCommand === "zap" ? "videos" : "images";
         const text = `You’ve used your 10 free ${noun} for now. Add $10 credit for $9.99: images are $0.50 and 15-second videos are $1. Connect Link for future top-ups, or pay directly here.`;
-        await ctx.db.insert("outboundDeliveries", {
+        await insertOwnedDelivery(ctx, {
           turnId,
           threadId,
           stage: "billing",
@@ -881,7 +882,7 @@ export const claimDelivery = internalMutation({
         await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
       } else {
         if (creativeCommand === "draw" && "drawSessionId" in admitted && admitted.drawSessionId && admitted.launchSecret) {
-          await ctx.db.insert("outboundDeliveries", {
+          await insertOwnedDelivery(ctx, {
             turnId,
             threadId,
             stage: "draw_card",
@@ -896,7 +897,7 @@ export const claimDelivery = internalMutation({
             updatedAtMs: args.receivedAtMs,
           });
         } else {
-          await ctx.db.insert("outboundDeliveries", {
+          await insertOwnedDelivery(ctx, {
             turnId,
             threadId,
             stage: "response",

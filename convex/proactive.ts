@@ -1,3 +1,4 @@
+import { insertOwnedDelivery } from "./lib/adminOwnership";
 import type { Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
@@ -141,7 +142,7 @@ export const scanIdle = internalMutation({
         { stage: "poll", itemKey: "poll", payload: { question: "What sounds right?", options: ["Live music", "Nightlife", "Food & drinks", "Surprise me"] } },
       ];
       for (const [sequence, stage] of stages.entries()) {
-        await ctx.db.insert("outboundDeliveries", {
+        await insertOwnedDelivery(ctx, {
           turnId, threadId: thread._id, stage: stage.stage, sequence, itemKey: stage.itemKey,
           idempotencyKey: `${turnId}:${sequence}:${stage.stage}:${stage.itemKey}`,
           payload: stage.payload, status: "pending", attemptCount: 0,

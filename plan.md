@@ -74,3 +74,11 @@ Add `drawSessions` and `creativePreviewMedia` tables keyed by opaque IDs, with e
 # Generate repair and Turbo addition
 
 Recover consumed Draw launch links using valid session cookies, with status-first browser authorization. Show immediate preparation and prevent duplicate Generate taps. Add Z-Image Turbo with four steps, safety enabled, one square image, and image-to-image strength 0.6. Persist its Fal request identity before polling; never resubmit an uncertain attempt. Keep Flare fast/detailed and their streamed previews. Validate session recovery and both Turbo input modes before deployment.
+
+# User-centered operations dashboard
+
+The private admin dashboard is organized around each pseudonymous COAST user rather than a set of unrelated global record tables. `/admin` provides a most-recently-active, cursor-paginated directory with status filtering and exact phone/email or user-ID lookup. Selecting a user opens `/admin/users/[userId]`, which retains selection across refresh and offers Overview, Activity, Generations, and Billing tabs.
+
+Overview uses the existing transactional credit calculation for purchased credit, independent rolling image/video allowance, unresolved reservations, and active creative work. Activity groups concierge and creative summaries by verified conversation without exposing their content. Generations distinguish ready-to-save, sending, delivered, and unknown outcomes. Billing groups hosted Checkout and connected-Link top-ups with their immutable ledger and payment events.
+
+All directory/profile APIs require the existing admin session, apply user/conversation/date/status filters before cursor pagination, and return explicit unavailable values when ownership cannot be established. User identity references are decrypted only by Vercel for operator display; response models exclude bodies, prompts, media URLs, credentials, encryption payloads, and raw identity references. Delivery and payment-event ownership fields are additive and backfilled in bounded, resumable batches from verified parent records.

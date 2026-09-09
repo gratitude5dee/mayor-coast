@@ -1,3 +1,4 @@
+import { insertOwnedDelivery } from "./lib/adminOwnership";
 import { v } from "convex/values";
 
 import type { Id } from "./_generated/dataModel";
@@ -161,7 +162,7 @@ export const completeNearby = internalMutation({
       });
     }
     for (const [sequence, stage] of stages.entries()) {
-      await ctx.db.insert("outboundDeliveries", {
+      await insertOwnedDelivery(ctx, {
         turnId,
         threadId: request.threadId,
         stage: stage.stage,
@@ -302,7 +303,7 @@ export const completeDirections = internalMutation({
       });
     }
     for (const [sequence, stage] of stages.entries()) {
-      await ctx.db.insert("outboundDeliveries", {
+      await insertOwnedDelivery(ctx, {
         turnId,
         threadId: request.threadId,
         stage: stage.stage,

@@ -30,7 +30,7 @@ export async function getCreativeCredits(ctx: QueryCtx | MutationCtx, userId: Id
   return { imageFreeRemaining: Math.max(0, 10 - images), videoFreeRemaining: Math.max(0, 10 - videos), creditCents, activeJob: active !== null };
 }
 
-async function findActiveJob(ctx: QueryCtx | MutationCtx, userId: Id<"coastUsers">, activeJobId?: Id<"creativeJobs">) {
+export async function findActiveJob(ctx: QueryCtx | MutationCtx, userId: Id<"coastUsers">, activeJobId?: Id<"creativeJobs">) {
   if (activeJobId) {
     const job = await ctx.db.get(activeJobId);
     if (job && isCreativeActive(job)) return job;

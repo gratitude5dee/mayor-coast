@@ -3,6 +3,7 @@ import UIKit
 
 @MainActor
 final class DrawSessionModel: ObservableObject {
+    enum Mode: String, CaseIterable { case fast, detailed }
     enum Phase: Equatable {
         case waitingForCard
         case connecting
@@ -32,17 +33,21 @@ final class DrawSessionModel: ObservableObject {
     }
 
     struct DrawEvent: Decodable {
+        let jobId: String
         let sequence: Int
         let state: String
         let mediaId: String?
+        let errorCode: String?
     }
 
-    struct Status: Decodable { let events: [DrawEvent] }
+    struct Status: Decodable { let events: [DrawEvent]; let activeJobId: String?; let latestJobId: String? }
     struct Upload: Decodable { let mediaId: String }
     struct Generation: Decodable { let jobId: String; let state: String }
 
     @Published private(set) var phase: Phase = .waitingForCard
     @Published private(set) var resultImage: UIImage?
+    @Published var mode: Mode = .fast
+    @Published private(set) var activeJobID: String?
 
     private var baseURL: URL?
     private var sessionID: String?
@@ -94,7 +99,7 @@ final class DrawSessionModel: ObservableObject {
         pollTask = nil
     }
 
-    func generate(prompt: String, imageData: Data?) async {
+    func generate(prompt: String, imageData: Data?, mode: Mode = .fast) async {
         guard !phase.isBusy else { return }
         let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard imageData != nil || !cleanPrompt.isEmpty else {
@@ -106,7 +111,7 @@ final class DrawSessionModel: ObservableObject {
             let mediaID: String?
             if let imageData { mediaID = try await upload(imageData) }
             else { mediaID = nil }
-            var body: [String: String] = ["requestKey": UUID().uuidString, "prompt": cleanPrompt]
+            var body: [String: String] = ["requestKey": UUID().uuidString, "prompt": cleanPrompt, "mode": mode.rawValue]
             if let mediaID { body["mediaId"] = mediaID }
             let data = try JSONSerialization.data(withJSONObject: body)
             let response: Generation = try await send(path: "generations", method: "POST", body: data, contentType: "application/json")
@@ -144,6 +149,7 @@ final class DrawSessionModel: ObservableObject {
 
     private func refresh() async throws {
         let status: Status = try await send(path: "status", method: "GET")
+        activeJobID = status.activeJobId
         guard let event = status.events.last else {
             if phase == .connecting { phase = .ready }
             return
@@ -152,7 +158,7 @@ final class DrawSessionModel: ObservableObject {
         case "admitted", "submitting", "queued", "running": phase = .generating
         case "ready_for_delivery", "delivering": phase = .sending
         case "delivered": phase = .delivered
-        case "failed", "terminal_failure", "refused": phase = .failed("Try a different idea")
+        case "failed", "terminal_failure", "refused": phase = .failed(event.errorCode == "DRAW_PROVIDER_PRECHECK_FAILED" ? "Provider could not start this image" : "Try a different idea")
         case "cancelled", "expired": phase = .failed("This request ended")
         default: break
         }

@@ -41,9 +41,9 @@ Deploy additive Convex schema first, then Vercel routes/workers, then enable ind
 
 Implementation order: contracts and routing → ledger/jobs → providers/media → Checkout → Link CLI → delivery/privacy → deployment validation.
 
-## Next: `/draw` iMessage canvas and progressive image preview
+## `/draw` iMessage canvas and progressive image preview
 
-`/draw` opens a short-lived COAST mini-app card in the existing 1:1 iMessage thread. Photon’s URL card hosts the web canvas inside Messages without extension identifiers. The repository also contains a native PencilKit `MSMessagesAppViewController` target for a live transcript canvas; production activation requires signing, installation, and matching Vercel team/bundle settings. It is a drawing-first entry point for the existing image-generation product, not a separate balance or provider: submitting a canvas consumes one image allowance or 50 cents using the same free-before-paid admission transaction as `/imagine`.
+`/draw` opens a short-lived COAST mini-app card in the existing 1:1 iMessage thread. Photon’s URL card hosts the web canvas inside Messages without extension identifiers. The hosted surface uses a compact vertical workspace with a square sketch/preview viewport, a 44-point toolbar, and a sticky bottom prompt/mode sheet. The repository also contains a native PencilKit `MSMessagesAppViewController` target for a live transcript canvas; production activation requires signing, installation, and matching Vercel team/bundle settings. It is a drawing-first entry point for the existing image-generation product, not a separate balance or provider: submitting a canvas consumes one image allowance or 50 cents using the same free-before-paid admission transaction as `/imagine`.
 
 ### Interaction contract
 
@@ -55,7 +55,7 @@ Implementation order: contracts and routing → ledger/jobs → providers/media 
 
 ### Progressive rendering
 
-OpenAI’s image API can request zero to three partial images. For `/draw`, request at most two partials, persist each only as private, job-owned preview media, and publish an opaque progress event to the card’s authenticated event stream. The card swaps the preview in place as events arrive; it must never receive a provider URL, Blob token, raw prompt, or wallet data. Final output follows the existing native iMessage attachment-then-caption contract. Do not send successive partial files as iMessage attachments: Photon supports media delivery and remote text edits, while the mini-app is the appropriate surface for live previews.
+OpenAI’s image API can request zero to three partial images. For `/draw`, request two partials from `gpt-image-2.5-flare`, persist each only as private, job-owned preview media, and publish an opaque progress event to the card’s authenticated SSE stream with polling fallback. Fast uses low quality and 85% JPEG compression; Detailed uses medium quality and 92% JPEG compression. The card swaps the preview in place as events arrive; it must never receive a provider URL, Blob token, raw prompt, or wallet data. Final output follows the existing native iMessage attachment-then-caption contract. Do not send successive partial files as iMessage attachments: Photon supports media delivery and remote text edits, while the mini-app is the appropriate surface for live previews.
 
 Use a short-lived `GET /api/draw/sessions/:id/events` SSE endpoint (with authenticated polling fallback for iMessage webviews), and an authorization endpoint that streams private preview bytes only after checking session ownership, job state, media identity, and expiry. Persist monotonic event sequence numbers so reconnects resume without duplicate UI state. A dropped event stream never affects durable generation or final delivery.
 
@@ -69,4 +69,4 @@ Add `drawSessions` and `creativePreviewMedia` tables keyed by opaque IDs, with e
 - Build the card as an accessible mobile canvas with pointer/touch handling, keyboard controls, reduced-motion progress, and a non-canvas prompt fallback.
 - Add durable tests for session/user/thread binding, double submit, expired session, blank canvas, free and paid admission, partial-event ordering/reconnect, private-preview authorization, cancellation, and 24-hour cleanup.
 - Test the Photon URL mini-app and the signed `ios/CoastDraw` extension on native iMessage before enabling the live layout. Verify the card opens from a direct iMessage URL, the card receives at most two partials, and final image delivery survives card closure, network loss, and an iMessage send retry.
-- Keep `/draw` behind an independent `COAST_DRAW_ENABLED` flag. The feature remains disabled until the deployed environment has image streaming credentials, private Blob access, and a verified mini-app delivery capability.
+- Keep `/draw` behind an independent `COAST_DRAW_ENABLED` flag. The production flag is currently `false`: the Flare canary reached OpenAI but returned `403 Your organization must be verified to use the model gpt-image-2.5-flare`. Enable the flag only after organization verification and a successful generate/edit stream canary; do not silently fall back to Sunburst.

@@ -5,10 +5,12 @@ import { parseServerEnv } from "@/lib/env";
 import { drawCookieName } from "@/lib/draw/auth";
 import { drawSessionCookie } from "@/lib/draw/launch";
 import { privateJson } from "@/lib/security/internal-auth";
+import { isSameOriginMutation } from "@/lib/draw/request";
 
 export const runtime = "nodejs";
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    if (!isSameOriginMutation(request)) return privateJson({ error: "cross_origin_request" }, { status: 403 });
     const env = parseServerEnv(); const { id } = await params;
     const body = z.object({ secret: z.string().min(20).max(256) }).parse(await request.json());
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

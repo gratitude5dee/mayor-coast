@@ -26,6 +26,8 @@ const serverEnvSchema = z.object({
   GROQ_CREATIVE_MODEL: z.string().min(1).optional(),
   COAST_CREATIVE_RUNTIME_URL: z.url().optional(),
   COAST_DRAW_RUNTIME_URL: z.url().optional(),
+  COAST_DRAW_ENABLED: z.enum(["true", "false"]).default("false"),
+  COAST_DRAW_MODEL: z.string().min(1).default("gpt-image-2.5-flare"),
   COAST_DRAW_APPLE_TEAM_ID: z.string().min(1).optional(),
   COAST_DRAW_EXTENSION_BUNDLE_ID: z.string().min(1).optional(),
   COAST_DRAW_APP_STORE_ID: z.coerce.number().int().positive().optional(),

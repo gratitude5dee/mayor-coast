@@ -10,6 +10,7 @@ struct DrawView: View {
     @State private var color = UIColor(red: 0.09, green: 0.14, blue: 0.11, alpha: 1)
     @State private var erasing = false
     @State private var importedPhoto: PhotosPickerItem?
+    @State private var mode: DrawSessionModel.Mode = .fast
 
     private let amber = Color(red: 0.96, green: 0.71, blue: 0.27)
     private let green = Color(red: 0.09, green: 0.14, blue: 0.11)
@@ -51,13 +52,20 @@ struct DrawView: View {
                 }.tint(cream)
             }
 
+            Picker("Mode", selection: $mode) {
+                ForEach(DrawSessionModel.Mode.allCases, id: \.self) { item in
+                    Text(item == .fast ? "Fast" : "Detailed").tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+
             HStack(spacing: 8) {
                 TextField("Turn this sketch into…", text: $prompt)
                     .textFieldStyle(.roundedBorder)
                     .submitLabel(.done)
                 Button("Generate") {
                     let data = canvas.png()
-                    Task { await model.generate(prompt: prompt, imageData: data) }
+                    Task { await model.generate(prompt: prompt, imageData: data, mode: mode) }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(amber)

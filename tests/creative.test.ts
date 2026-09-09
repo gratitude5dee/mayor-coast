@@ -20,6 +20,7 @@ import {
   falRequestUrl,
 } from "../src/app/api/internal/creative/route";
 import { completedStroke } from "../src/lib/draw/canvas";
+import { DEFAULT_DRAW_MODEL, drawImageSettings, drawStreamEvent } from "../src/lib/draw/provider";
 import { drawLaunchSecret, drawSessionCookie } from "../src/lib/draw/launch";
 import { resolveMiniApp } from "@photon-ai/chat-adapter-imessage";
 
@@ -87,6 +88,15 @@ describe("creative commands and credits", () => {
     expect(creativeLatencyReward("imagine", 9_000)).toBe(1);
     expect(creativeLatencyReward("imagine", 15_000)).toBe(0.5);
     expect(creativeLatencyReward("imagine", 21_000)).toBe(0);
+  });
+
+  it("pins fast and detailed Draw to Flare with durable stream event handling", () => {
+    expect(DEFAULT_DRAW_MODEL).toBe("gpt-image-2.5-flare");
+    expect(drawImageSettings("fast")).toMatchObject({ quality: "low", outputFormat: "jpeg", outputCompression: 85, partialImages: 2 });
+    expect(drawImageSettings("detailed")).toMatchObject({ quality: "medium", outputFormat: "jpeg", outputCompression: 92, partialImages: 2 });
+    expect(drawStreamEvent({ type: "image_edit.partial_image", b64_json: "preview", partial_image_index: 1 })).toMatchObject({ kind: "preview", index: 1 });
+    expect(drawStreamEvent({ type: "image_generation.completed", b64_json: "final" })).toEqual({ kind: "completed", base64: "final" });
+    expect(drawStreamEvent({ type: "image_generation.partial_image", b64_json: "preview" })).not.toMatchObject({ kind: "completed" });
   });
 
   it("accepts the fenced Convex worker envelope", () => {

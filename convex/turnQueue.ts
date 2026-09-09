@@ -1242,19 +1242,19 @@ export const recordDeliverySuccess = internalMutation({
         });
         await settleCreativeFunding(ctx, creativeJob, args.nowMs);
         if (creativeJob.drawSessionId) {
-          const prior = await ctx.db
-            .query("drawEvents")
-            .withIndex("by_job_sequence", (q) => q.eq("jobId", creativeJob._id))
-            .collect();
+          const session = await ctx.db.get(creativeJob.drawSessionId);
+          const prior = await ctx.db.query("drawEvents").withIndex("by_session_created", (q) => q.eq("sessionId", creativeJob.drawSessionId!)).collect();
+          const sequence = Math.max(session?.eventSequence ?? -1, ...prior.map((item) => item.sequence)) + 1;
           await ctx.db.insert("drawEvents", {
             sessionId: creativeJob.drawSessionId,
             jobId: creativeJob._id,
-            sequence: (prior.length ? Math.max(...prior.map((item) => item.sequence)) : 0) + 1,
+            sequence,
             kind: "state",
             state: "delivered",
             ...(creativeJob.outputMediaId ? { mediaId: creativeJob.outputMediaId } : {}),
             createdAtMs: args.nowMs,
           });
+          await ctx.db.patch(creativeJob.drawSessionId, { eventSequence: sequence, updatedAtMs: args.nowMs });
         }
       }
     }

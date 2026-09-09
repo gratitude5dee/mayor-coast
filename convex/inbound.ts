@@ -813,6 +813,23 @@ export const claimDelivery = internalMutation({
       controlReply === null &&
       command === "none"
     ) {
+      if (creativeCommand === "draw" && process.env.COAST_DRAW_ENABLED !== "true") {
+        await ctx.db.insert("outboundDeliveries", {
+          turnId,
+          threadId,
+          stage: "response",
+          sequence: 0,
+          itemKey: "draw-disabled",
+          idempotencyKey: `${turnId}:draw-disabled`,
+          payload: { text: "COAST Draw is temporarily paused while we finish the image service. Try /draw again soon." },
+          status: "pending",
+          attemptCount: 0,
+          nextAttemptAtMs: args.receivedAtMs,
+          createdAtMs: args.receivedAtMs,
+          updatedAtMs: args.receivedAtMs,
+        });
+        await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
+      } else {
       const admitted = await admitCreativeInline(ctx, {
         userId,
         threadId,
@@ -898,6 +915,7 @@ export const claimDelivery = internalMutation({
           .withIndex("by_request_key", (q) => q.eq("requestKey", `${args.webhookId}:${args.providerMessageId}`))
           .unique();
         if (job !== null && creativeCommand !== "draw") await ctx.scheduler.runAfter(0, internal.creative.run, { jobId: job._id });
+      }
       }
     }
 

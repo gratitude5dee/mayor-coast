@@ -5,11 +5,13 @@ import { api } from "../../../../../../../convex/_generated/api";
 import { parseServerEnv } from "@/lib/env";
 import { drawBrowserToken } from "@/lib/draw/auth";
 import { privateJson } from "@/lib/security/internal-auth";
+import { isSameOriginMutation } from "@/lib/draw/request";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    if (!isSameOriginMutation(request)) return privateJson({ error: "cross_origin_request" }, { status: 403 });
     const env = parseServerEnv(); const { id } = await params; const auth = await drawBrowserToken(id); if (!auth) return privateJson({ error: "unauthorized" }, { status: 401 });
     const bytes = Buffer.from(await request.arrayBuffer()); if (bytes.byteLength > 3 * 1024 * 1024) return privateJson({ error: "image_too_large" }, { status: 413 });
     const image = sharp(bytes); const metadata = await image.metadata(); if (!metadata.width || !metadata.height || !["jpeg", "png", "webp"].includes(metadata.format ?? "")) return privateJson({ error: "invalid_image" }, { status: 422 });

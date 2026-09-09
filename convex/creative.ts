@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 
 import type { Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { serviceSecretFingerprintHex } from "./lib/service_auth";
 import { admitCreativeJob, getCreativeCredits, releaseCreativeFunding } from "./lib/creative";
@@ -9,6 +9,20 @@ import { creativePollDelayMs } from "../src/lib/creative";
 
 const jobCommand = v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"));
 const reservationSource = v.union(v.literal("free"), v.literal("credit"), v.literal("payment"));
+const drawMode = v.union(v.literal("fast"), v.literal("detailed"));
+
+async function nextDrawEventSequence(ctx: MutationCtx, sessionId: Id<"drawSessions">): Promise<number> {
+  const session = await ctx.db.get(sessionId);
+  if (!session) throw new Error("DRAW_SESSION_MISSING");
+  let current = session.eventSequence;
+  if (current === undefined) {
+    const existing = await ctx.db.query("drawEvents").withIndex("by_session_created", q => q.eq("sessionId", sessionId)).collect();
+    current = existing.reduce((maximum, event) => Math.max(maximum, event.sequence), -1);
+  }
+  const next = current + 1;
+  await ctx.db.patch(sessionId, { eventSequence: next });
+  return next;
+}
 
 export const getCredits = internalQuery({
   args: { userId: v.id("coastUsers"), nowMs: v.number() },
@@ -143,14 +157,15 @@ export const createDrawMedia = internalMutation({
 });
 
 export const admitDrawGeneration = internalMutation({
-  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), inputMediaId: v.optional(v.id("creativeMedia")), nowMs: v.number() },
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: drawMode, inputMediaId: v.optional(v.id("creativeMedia")), nowMs: v.number() },
   returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
     if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) throw new Error("DRAW_SESSION_INVALID");
-    const result = await admitCreativeJob(ctx, { userId: session.userId, threadId: session.threadId, sourceMessageId: session.sourceMessageId, turnId: session.turnId, requestKey: args.requestKey, command: "draw", encryptedPayload: args.encryptedPayload, nowMs: args.nowMs, drawSessionId: session._id, ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}), revisionKey: args.requestKey });
+    const result = await admitCreativeJob(ctx, { userId: session.userId, threadId: session.threadId, sourceMessageId: session.sourceMessageId, turnId: session.turnId, requestKey: args.requestKey, command: "draw", encryptedPayload: args.encryptedPayload, nowMs: args.nowMs, drawSessionId: session._id, drawMode: args.mode, ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}), revisionKey: args.requestKey });
+    const sequence = await nextDrawEventSequence(ctx, session._id);
     await ctx.db.patch(session._id, { activeJobId: result.jobId, latestJobId: result.jobId, updatedAtMs: args.nowMs });
-    await ctx.db.insert("drawEvents", { sessionId: session._id, jobId: result.jobId, sequence: 0, kind: "state", state: result.state, createdAtMs: args.nowMs });
+    await ctx.db.insert("drawEvents", { sessionId: session._id, jobId: result.jobId, sequence, kind: "state", state: result.state, createdAtMs: args.nowMs });
     if (result.state === "admitted") await ctx.scheduler.runAfter(0, internal.creative.run, { jobId: result.jobId });
     return result;
   },
@@ -158,13 +173,19 @@ export const admitDrawGeneration = internalMutation({
 
 export const listDrawEvents = internalQuery({
   args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), afterSequence: v.optional(v.number()), nowMs: v.number() },
-  returns: v.union(v.object({ events: v.array(v.object({ sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()) })), latest: v.union(v.number(), v.null()) }), v.null()),
+  returns: v.union(v.object({ events: v.array(v.object({ jobId: v.id("creativeJobs"), sequence: v.number(), kind: v.string(), state: v.string(), mediaId: v.union(v.id("creativeMedia"), v.null()), previewIndex: v.union(v.number(), v.null()), errorCode: v.union(v.string(), v.null()) })), latest: v.union(v.number(), v.null()), activeJobId: v.union(v.id("creativeJobs"), v.null()), latestJobId: v.union(v.id("creativeJobs"), v.null()), initialMediaId: v.union(v.id("creativeMedia"), v.null()) }), v.null()),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
     if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) return null;
     const events = await ctx.db.query("drawEvents").withIndex("by_session_created", q => q.eq("sessionId", args.sessionId)).collect();
     const filtered = events.filter(item => item.sequence > (args.afterSequence ?? -1)).sort((a,b) => a.sequence-b.sequence).slice(0, 50);
-    return { events: filtered.map(item => ({ sequence: item.sequence, kind: item.kind, state: item.state, mediaId: item.mediaId ?? null, previewIndex: item.previewIndex ?? null })), latest: events.length ? Math.max(...events.map(item => item.sequence)) : null };
+    return {
+      events: filtered.map(item => ({ jobId: item.jobId, sequence: item.sequence, kind: item.kind, state: item.state, mediaId: item.mediaId ?? null, previewIndex: item.previewIndex ?? null, errorCode: item.errorCode ?? null })),
+      latest: events.length ? Math.max(...events.map(item => item.sequence)) : null,
+      activeJobId: session.activeJobId ?? null,
+      latestJobId: session.latestJobId ?? null,
+      initialMediaId: session.initialMediaId ?? null,
+    };
   },
 });
 
@@ -236,6 +257,77 @@ const processingOwnership = {
   attemptId: v.string(),
   fencingToken: v.number(),
 };
+
+export const recordDrawSubmission = internalMutation({
+  args: { ...processingOwnership, providerRequestId: v.string(), providerModel: v.string(), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.command !== "draw" || job.state !== "submitting" || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken) return false;
+    const sequence = job.drawSessionId ? await nextDrawEventSequence(ctx, job.drawSessionId) : (job.eventSequence ?? 0) + 1;
+    await ctx.db.patch(job._id, {
+      state: "running",
+      providerRequestId: args.providerRequestId,
+      providerModel: args.providerModel,
+      submittedAtMs: args.nowMs,
+      heartbeatAtMs: args.nowMs,
+      eventSequence: sequence,
+      updatedAtMs: args.nowMs,
+    });
+    if (job.drawSessionId) await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "state", state: "running", createdAtMs: args.nowMs });
+    return true;
+  },
+});
+
+export const recordDrawPreview = internalMutation({
+  args: { ...processingOwnership, sourceUrl: v.string(), mimeType: v.string(), filename: v.string(), byteLength: v.number(), previewIndex: v.number(), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.command !== "draw" || job.state !== "running" || !job.drawSessionId || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken) return false;
+    const priorEvents = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
+    if (priorEvents.some(event => event.kind === "preview" && event.previewIndex === args.previewIndex)) return true;
+    const retireAtMs = args.nowMs + 15 * 60_000;
+    for (const event of priorEvents) {
+      if (event.kind !== "preview" || !event.mediaId) continue;
+      const media = await ctx.db.get(event.mediaId);
+      if (media && media.expiresAtMs > retireAtMs) await ctx.db.patch(media._id, { expiresAtMs: retireAtMs });
+    }
+    const mediaId = await ctx.db.insert("creativeMedia", {
+      jobId: job._id,
+      drawSessionId: job.drawSessionId,
+      userId: job.userId,
+      threadId: job.threadId,
+      role: "preview",
+      sourceUrl: args.sourceUrl,
+      mimeType: args.mimeType,
+      filename: args.filename,
+      byteLength: args.byteLength,
+      createdAtMs: args.nowMs,
+      expiresAtMs: Math.min(job.expiresAtMs, retireAtMs),
+      deletionState: "pending",
+    });
+    const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
+    await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "preview", state: "running", mediaId, previewIndex: args.previewIndex, createdAtMs: args.nowMs });
+    await ctx.db.patch(job._id, { eventSequence: sequence, heartbeatAtMs: args.nowMs, firstPreviewAtMs: job.firstPreviewAtMs ?? args.nowMs, updatedAtMs: args.nowMs });
+    return true;
+  },
+});
+
+export const cancelDrawJob = internalMutation({
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), jobId: v.id("creativeJobs"), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    const job = await ctx.db.get(args.jobId);
+    if (!session || !job || session.browserTokenHash !== args.browserTokenHash || session.status !== "active" || job.drawSessionId !== session._id || ["delivered", "failed", "refused", "cancelled", "expired"].includes(job.state)) return false;
+    const sequence = await nextDrawEventSequence(ctx, session._id);
+    await ctx.db.patch(job._id, { state: "cancelled", eventSequence: sequence, lastErrorCode: "DRAW_CANCELLED", updatedAtMs: args.nowMs });
+    await ctx.db.insert("drawEvents", { sessionId: session._id, jobId: job._id, sequence, kind: "state", state: "cancelled", createdAtMs: args.nowMs });
+    await releaseCreativeFunding(ctx, job, args.nowMs);
+    return true;
+  },
+});
 
 export const recordProviderSubmission = internalMutation({
   args: { ...processingOwnership, providerRequestId: v.string(), state: v.union(v.literal("queued"), v.literal("running")), nowMs: v.number() },
@@ -328,7 +420,15 @@ export const completeProcessing = internalMutation({
     await ctx.db.patch(job._id, { state: "ready_for_delivery", deliveryId: delivery, outputMediaId: mediaId, completedAtMs: args.nowMs, updatedAtMs: args.nowMs });
     if (job.drawSessionId) {
       const prior = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
-      await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence: (prior.length ? Math.max(...prior.map(item => item.sequence)) : 0) + 1, kind: "completed", state: "ready_for_delivery", mediaId, createdAtMs: args.nowMs });
+      const retireAtMs = args.nowMs + 15 * 60_000;
+      for (const event of prior) {
+        if (event.kind !== "preview" || !event.mediaId) continue;
+        const preview = await ctx.db.get(event.mediaId);
+        if (preview && preview.expiresAtMs > retireAtMs) await ctx.db.patch(preview._id, { expiresAtMs: retireAtMs });
+      }
+      const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
+      await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "completed", state: "ready_for_delivery", mediaId, createdAtMs: args.nowMs });
+      await ctx.db.patch(job._id, { eventSequence: sequence });
       await ctx.db.patch(job.drawSessionId, { latestJobId: job._id, updatedAtMs: args.nowMs });
     }
     await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId: job.turnId });
@@ -343,13 +443,34 @@ export const failProcessing = internalMutation({
     const job = await ctx.db.get(args.jobId);
     if (!job || !["submitting", "queued", "running", "retryable_failure"].includes(job.state) || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken) return null;
     if (args.outcome === "definitive") {
-      await ctx.db.patch(job._id, { state: "failed", lastErrorCode: args.errorCode, updatedAtMs: args.nowMs });
+      const sequence = job.drawSessionId ? await nextDrawEventSequence(ctx, job.drawSessionId) : (job.eventSequence ?? 0) + 1;
+      await ctx.db.patch(job._id, { state: "failed", eventSequence: sequence, lastErrorCode: args.errorCode, updatedAtMs: args.nowMs });
+      if (job.drawSessionId) await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "state", state: "failed", errorCode: args.errorCode, createdAtMs: args.nowMs });
       await releaseCreativeFunding(ctx, job, args.nowMs);
     } else {
-      await ctx.db.patch(job._id, { state: args.outcome === "unknown" ? "submission_unknown" : "retryable_failure", lastErrorCode: args.errorCode, updatedAtMs: args.nowMs });
+      const state = args.outcome === "unknown" ? "submission_unknown" : "retryable_failure";
+      const sequence = job.drawSessionId ? await nextDrawEventSequence(ctx, job.drawSessionId) : (job.eventSequence ?? 0) + 1;
+      await ctx.db.patch(job._id, { state, eventSequence: sequence, lastErrorCode: args.errorCode, updatedAtMs: args.nowMs });
+      if (job.drawSessionId) await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "state", state, errorCode: args.errorCode, createdAtMs: args.nowMs });
       if (args.outcome === "retryable" && job.providerRequestId) await ctx.scheduler.runAfter(15_000, internal.creative.poll, { jobId: job._id });
     }
     return null;
+  },
+});
+
+export const releaseStuckDraw = internalMutation({
+  args: { jobId: v.id("creativeJobs"), expectedErrorCode: v.string(), nowMs: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.command !== "draw" || job.state !== "submission_unknown" || job.providerRequestId || job.outputMediaId || job.lastErrorCode !== args.expectedErrorCode || !job.drawSessionId) return false;
+    const events = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
+    if (events.some(event => event.kind === "preview" || event.kind === "completed")) return false;
+    const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
+    await ctx.db.patch(job._id, { state: "failed", eventSequence: sequence, lastErrorCode: "DRAW_PROVIDER_PRECHECK_FAILED", updatedAtMs: args.nowMs });
+    await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "state", state: "failed", errorCode: "DRAW_PROVIDER_PRECHECK_FAILED", createdAtMs: args.nowMs });
+    await releaseCreativeFunding(ctx, job, args.nowMs);
+    return true;
   },
 });
 
@@ -439,6 +560,29 @@ async function runtimeErrorCode(response: Response): Promise<string> {
   return `CREATIVE_RUNTIME_HTTP_${response.status}`;
 }
 
+async function runtimeFailure(response: Response, hasProviderRequestId: boolean): Promise<{
+  code: string;
+  outcome: "definitive" | "unknown" | "retryable";
+}> {
+  const headerCode = response.headers.get("x-coast-error-code");
+  const headerOutcome = response.headers.get("x-coast-outcome");
+  let body: { error?: unknown; code?: unknown; outcome?: unknown } | undefined;
+  try {
+    body = await response.json() as typeof body;
+  } catch {
+    // HTTP metadata remains sufficient and contains no user content.
+  }
+  const candidateCode = headerCode ?? body?.code ?? body?.error;
+  const code = typeof candidateCode === "string" && /^[A-Z0-9_]{3,120}$/iu.test(candidateCode)
+    ? candidateCode.slice(0, 120)
+    : `CREATIVE_RUNTIME_HTTP_${response.status}`;
+  const candidateOutcome = headerOutcome ?? body?.outcome;
+  const outcome = candidateOutcome === "definitive" || candidateOutcome === "unknown" || candidateOutcome === "retryable"
+    ? candidateOutcome
+    : failureOutcome(response.status, hasProviderRequestId);
+  return { code, outcome };
+}
+
 function failureOutcome(status: number, hasProviderRequestId: boolean): "definitive" | "unknown" | "retryable" {
   if (status >= 400 && status < 500) return "definitive";
   return hasProviderRequestId ? "retryable" : "unknown";
@@ -460,7 +604,8 @@ export const run = internalAction({
       const requestBody = { jobId: claim.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, command: claim.command, encryptedPayload: claim.encryptedPayload, ...(claim.command === "draw" ? {} : { operation: "submit" as const }) };
       const response = await fetch(runtimeUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify(requestBody), signal: AbortSignal.timeout(claim.command === "draw" ? 270_000 : 30_000) });
       if (!response.ok) {
-        await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: await runtimeErrorCode(response), outcome: failureOutcome(response.status, false), nowMs: Date.now() });
+        const failure = await runtimeFailure(response, false);
+        await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: failure.code, outcome: failure.outcome, nowMs: Date.now() });
         return null;
       }
       const result = (await response.json()) as { status?: unknown; providerRequestId?: unknown; url?: unknown; mimeType?: unknown; filename?: unknown; caption?: unknown };
@@ -490,7 +635,8 @@ export const poll = internalAction({
     try {
       const response = await fetch(runtimeUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ operation: "poll", jobId: claim.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, command: claim.command, encryptedPayload: claim.encryptedPayload, providerRequestId: claim.providerRequestId }), signal: AbortSignal.timeout(90_000) });
       if (!response.ok) {
-        await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: await runtimeErrorCode(response), outcome: failureOutcome(response.status, true), nowMs: Date.now() });
+        const failure = await runtimeFailure(response, true);
+        await ctx.runMutation(internal.creative.failProcessing, { jobId: args.jobId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, errorCode: failure.code, outcome: failure.outcome, nowMs: Date.now() });
         return null;
       }
       const result = (await response.json()) as { status?: unknown; url?: unknown; mimeType?: unknown; filename?: unknown; caption?: unknown };
@@ -531,6 +677,34 @@ export const providerCanary = internalAction({
       };
     } catch {
       return { ok: false, cancelled: false, code: "FAL_CANARY_REQUEST_FAILED" };
+    }
+  },
+});
+
+export const drawProviderCanary = internalAction({
+  args: { kind: v.union(v.literal("generate"), v.literal("edit")) },
+  returns: v.object({ status: v.string(), model: v.string(), partials: v.number(), hasRequestId: v.boolean(), errorCode: v.string() }),
+  handler: async (_ctx, args) => {
+    const runtimeUrl = process.env.COAST_DRAW_RUNTIME_URL;
+    const secret = process.env.COAST_CONVEX_SERVICE_SECRET;
+    if (!runtimeUrl || !secret) return { status: "runtime_not_configured", model: "", partials: 0, hasRequestId: false, errorCode: "" };
+    try {
+      const response = await fetch(runtimeUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+        body: JSON.stringify({ operation: "canary", kind: args.kind }),
+        signal: AbortSignal.timeout(270_000),
+      });
+      const body = await response.json() as { status?: unknown; model?: unknown; partials?: unknown; hasRequestId?: unknown; error?: unknown; code?: unknown; details?: unknown };
+      return {
+        status: typeof body.status === "string" ? body.status : `HTTP_${response.status}`,
+        model: typeof body.model === "string" ? body.model : "",
+        partials: typeof body.partials === "number" ? body.partials : 0,
+        hasRequestId: body.hasRequestId === true,
+        errorCode: typeof body.details === "string" ? body.details : typeof body.code === "string" ? body.code : typeof body.error === "string" ? body.error : "",
+      };
+    } catch {
+      return { status: "request_failed", model: "", partials: 0, hasRequestId: false, errorCode: "REQUEST_FAILED" };
     }
   },
 });

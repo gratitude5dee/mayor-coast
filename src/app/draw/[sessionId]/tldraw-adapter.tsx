@@ -1,7 +1,7 @@
 "use client";
 
 import "tldraw/tldraw.css";
-import { Tldraw, type Editor } from "tldraw";
+import { DefaultColorStyle, DefaultSizeStyle, Tldraw, type Editor } from "tldraw";
 
 /**
  * The staged alternative editor. It is only mounted when a production tldraw
@@ -15,6 +15,8 @@ export type RasterEditorAdapter = {
   clear(): void;
   undo(): void;
   redo(): void;
+  setBrush(color: string, width: number): void;
+  setEraser(enabled: boolean): void;
   exportJpeg(): Promise<Blob | null>;
 };
 
@@ -24,10 +26,24 @@ type Props = {
 };
 
 function asAdapter(editor: Editor): RasterEditorAdapter {
+  const colorFor = (color: string) => ({
+    "#17231d": "black",
+    "#b45309": "orange",
+    "#dc2626": "red",
+    "#2563eb": "blue",
+    "#ffffff": "white",
+  }[color] ?? "black");
+  const sizeFor = (width: number) => width <= 12 ? "s" : width <= 24 ? "m" : width <= 40 ? "l" : "xl";
   return {
     clear() { editor.deleteShapes([...editor.getCurrentPageShapeIds()]); },
     undo() { editor.undo(); },
     redo() { editor.redo(); },
+    setBrush(color, width) {
+      editor.setCurrentTool("draw");
+      editor.setStyleForNextShapes(DefaultColorStyle, colorFor(color));
+      editor.setStyleForNextShapes(DefaultSizeStyle, sizeFor(width));
+    },
+    setEraser(enabled) { editor.setCurrentTool(enabled ? "eraser" : "draw"); },
     async exportJpeg() {
       const shapes = [...editor.getCurrentPageShapeIds()];
       if (shapes.length === 0) return null;
@@ -50,4 +66,3 @@ export default function TldrawAdapter({ licenseKey, onReady }: Props) {
     />
   </div>;
 }
-

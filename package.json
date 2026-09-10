@@ -13,6 +13,7 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:draw-layout": "playwright test e2e/draw-layout.spec.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check": "pnpm soul:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",

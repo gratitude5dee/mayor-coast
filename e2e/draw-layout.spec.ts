@@ -64,6 +64,8 @@ test("the centered view toggle and icon model picker stay reachable", async ({ p
     return route.abort();
   });
   await page.goto("/draw/layout-controls");
+  await expect(page.getByRole("heading", { name: "Create" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sketch a move" })).toHaveCount(0);
   const sketch = page.getByRole("tab", { name: "Sketch" });
   const preview = page.getByRole("tab", { name: "Preview" });
   await expect(sketch).toBeVisible();
@@ -75,6 +77,21 @@ test("the centered view toggle and icon model picker stay reachable", async ({ p
   await expect(page.getByRole("radio")).toHaveCount(4);
   await expect(page.getByText("Flare Fast", { exact: true })).toBeVisible();
   await expect(page.getByText("Your next idea starts here", { exact: true })).toHaveCount(0);
+
+  const drawingCanvas = canvas(page);
+  const canvasBox = await drawingCanvas.boundingBox();
+  const undoBox = await page.getByRole("button", { name: "Undo" }).boundingBox();
+  const inkControls = page.locator(".ink-controls");
+  const inkBox = await inkControls.boundingBox();
+  expect(canvasBox).not.toBeNull();
+  expect(undoBox).not.toBeNull();
+  expect(inkBox).not.toBeNull();
+  expect(undoBox!.x + undoBox!.width).toBeLessThanOrEqual(canvasBox!.x);
+  expect(inkBox!.y).toBeGreaterThanOrEqual(canvasBox!.y + canvasBox!.height);
+  await expect(page.getByRole("button", { name: "Redo" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Clear sketch" })).toBeVisible();
+  await expect(page.getByLabel("Import image")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Eraser" })).toBeVisible();
 
   for (const item of ["fast", "detailed", "turbo", "hq"]) {
     const icon = page.locator(`[data-mode="${item}"] svg`);

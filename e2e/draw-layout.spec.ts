@@ -56,6 +56,27 @@ test("a revision strip cannot collapse the custom canvas", async ({ page }) => {
   await expectVisibleSquareCanvas(page);
 });
 
+test("the centered view toggle and icon model picker stay reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let generationCalls = 0;
+  await page.route("**/api/draw/sessions/layout-controls/generations", (route) => {
+    generationCalls += 1;
+    return route.abort();
+  });
+  await page.goto("/draw/layout-controls");
+  await expect(page.locator(".view-toggle")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Sketch" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Preview" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Generation mode" })).toBeVisible();
+  await expect(page.getByRole("radio")).toHaveCount(4);
+  await expect(page.getByText("Flare Fast", { exact: true })).toBeVisible();
+  await expect(page.getByText("Your next idea starts here", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("radio", { name: "Turbo · 4 steps" }).click();
+  await expect(page.getByText("Turbo · 4 steps", { exact: true })).toBeVisible();
+  expect(generationCalls).toBe(0);
+});
+
 test("drawing changes the custom canvas without scrolling the mini-app", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/draw/layout-stroke");

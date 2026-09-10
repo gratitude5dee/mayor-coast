@@ -1,5 +1,7 @@
 # COAST `/imagine`, `/zap`, and generation credits
 
+The current Draw polish handoff is documented in [docs/plans/draw-miniapp-polish.md](docs/plans/draw-miniapp-polish.md). It covers the centered crossfade view toggle, icon model picker, adaptive React Bits-inspired decoration, and export-safe pencil glow.
+
 This is the implementation handoff for the existing 1:1 Photon iMessage experience in `gratitude5dee/mayor-coast`.
 
 ## Product contract

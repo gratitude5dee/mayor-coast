@@ -33,9 +33,9 @@ function detectCommand(
   return "none";
 }
 
-function detectCreativeCommand(text: string): "imagine" | "zap" | "draw" | null {
-  const match = /^\s*\/(imagine|zap|draw)(?:\s+|$)/iu.exec(text);
-  return (match?.[1]?.toLowerCase() as "imagine" | "zap" | "draw" | undefined) ?? null;
+function detectCreativeCommand(text: string): "imagine" | "zap" | "draw" | "edit" | null {
+  const match = /^\s*\/(imagine|zap|draw|edit)(?:\s+|$)/iu.exec(text);
+  return (match?.[1]?.toLowerCase() as "imagine" | "zap" | "draw" | "edit" | undefined) ?? null;
 }
 
 function replyForCommand(
@@ -188,7 +188,7 @@ export const claimDelivery = internalMutation({
     unsupportedContent: v.optional(
       v.union(v.literal("attachment"), v.literal("private_location")),
     ),
-    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"))),
+    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"), v.literal("edit"))),
     creativeCommandAmbiguous: v.optional(v.boolean()),
     animateLatestDraw: v.optional(v.boolean()),
     encryptedCreativePayload: v.optional(v.string()),
@@ -820,7 +820,7 @@ export const claimDelivery = internalMutation({
       controlReply === null &&
       command === "none"
     ) {
-      if (creativeCommand === "draw" && process.env.COAST_DRAW_ENABLED !== "true") {
+      if ((creativeCommand === "draw" || creativeCommand === "edit") && process.env.COAST_DRAW_ENABLED !== "true") {
         await insertOwnedDelivery(ctx, {
           turnId,
           threadId,
@@ -870,6 +870,13 @@ export const claimDelivery = internalMutation({
           updatedAtMs: args.receivedAtMs,
         });
         await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
+      } else if (admitted.state === "source_missing") {
+        await insertOwnedDelivery(ctx, {
+          turnId, threadId, stage: "response", sequence: 0, itemKey: "edit-source-missing", idempotencyKey: `${turnId}:edit-source-missing`,
+          payload: { text: "I need an image to edit. Send /draw first, import a photo in Draw, or attach one image with /edit." },
+          status: "pending", attemptCount: 0, nextAttemptAtMs: args.receivedAtMs, createdAtMs: args.receivedAtMs, updatedAtMs: args.receivedAtMs,
+        });
+        await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
       } else if (admitted.state === "awaiting_payment") {
         const noun = creativeCommand === "zap" ? "videos" : "images";
         const text = `You’ve used your 10 free ${noun} for now. Add $10 credit for $9.99: images are $0.50 and 15-second videos are $1. Connect Link for future top-ups, or pay directly here.`;
@@ -892,7 +899,7 @@ export const claimDelivery = internalMutation({
         });
         await ctx.scheduler.runAfter(0, internal.turnQueue.deliverTurn, { turnId });
       } else {
-        if (creativeCommand === "draw" && "drawSessionId" in admitted && admitted.drawSessionId && admitted.encryptedLaunchSecret) {
+        if ((creativeCommand === "draw" || creativeCommand === "edit") && "drawSessionId" in admitted && admitted.drawSessionId && admitted.encryptedLaunchSecret) {
           await insertOwnedDelivery(ctx, {
             turnId,
             threadId,
@@ -1017,7 +1024,7 @@ async function admitCreativeInline(
     sourceMessageId: Id<"coastMessages">;
     turnId: Id<"coastTurns">;
     requestKey: string;
-    command: "imagine" | "zap" | "draw";
+    command: "imagine" | "zap" | "draw" | "edit";
     encryptedPayload: string;
     animateLatestDraw?: boolean;
     drawLaunchSecretHash?: string;
@@ -1025,13 +1032,13 @@ async function admitCreativeInline(
     nowMs: number;
   },
 ) {
-  if (args.command === "draw") {
+  if (args.command === "draw" || args.command === "edit") {
     const existingSession = await ctx.db.query("drawSessions").withIndex("by_request_key", q => q.eq("requestKey", args.requestKey)).unique();
     // Webhook retries reuse the original workspace and encrypted launch
     // material. The delivery worker decrypts it only while forming the card
     // URL; ordinary Convex records never receive plaintext launch secrets.
     if (existingSession) return {
-      state: "admitted",
+      state: "admitted" as const,
       drawSessionId: existingSession._id,
       encryptedLaunchSecret: existingSession.encryptedLaunchSecret,
     };
@@ -1056,15 +1063,36 @@ async function admitCreativeInline(
       updatedAtMs: args.nowMs,
       expiresAtMs: args.nowMs + 24 * 60 * 60_000,
     });
-    return { state: "admitted", drawSessionId: sessionId, encryptedLaunchSecret };
+    if (args.command === "draw") return { state: "admitted" as const, drawSessionId: sessionId, encryptedLaunchSecret };
+    const source = await latestDrawOutputForThread(ctx, args.userId, args.threadId, args.nowMs);
+    if (!source) return { state: "source_missing" as const, drawSessionId: sessionId, encryptedLaunchSecret };
+    try {
+      const mode = source.job.drawMode ?? "fast";
+      const result = await admitCreativeJob(ctx, {
+        userId: args.userId, threadId: args.threadId, sourceMessageId: args.sourceMessageId, turnId: args.turnId,
+        requestKey: args.requestKey, command: "draw", encryptedPayload: args.encryptedPayload, nowMs: args.nowMs,
+        drawSessionId: sessionId, drawMode: mode, inputMediaId: source.media._id, inputCategory: "result",
+        parentJobId: source.job._id, rootJobId: source.job.rootJobId ?? source.job._id, revisionNumber: (source.job.revisionNumber ?? 1) + 1,
+        drawApiMode: mode === "turbo" ? "turbo" : process.env.COAST_DRAW_MULTITURN_ENABLED === "true" ? "responses" : "images",
+      });
+      const drawSession = await ctx.db.get(sessionId);
+      const sequence = (drawSession?.eventSequence ?? -1) + 1;
+      await ctx.db.patch(sessionId, { activeJobId: result.jobId, latestJobId: result.jobId, eventSequence: sequence, updatedAtMs: args.nowMs });
+      await ctx.db.insert("drawEvents", { sessionId, jobId: result.jobId, sequence, kind: "state", state: result.state, createdAtMs: args.nowMs });
+      return { ...result, drawSessionId: sessionId, encryptedLaunchSecret };
+    } catch (error) {
+      if (error instanceof Error && error.message === "CREATIVE_JOB_ALREADY_ACTIVE") return { state: "busy" as const };
+      throw error;
+    }
   }
   try {
-    const latestDrawMediaId = args.command === "zap" && args.animateLatestDraw
+    const latestDraw = args.command === "zap" && args.animateLatestDraw
       ? await latestDrawOutputForThread(ctx, args.userId, args.threadId, args.nowMs)
       : null;
     const admitted = await admitCreativeJob(ctx, {
       ...args,
-      ...(latestDrawMediaId ? { inputMediaId: latestDrawMediaId, inputCategory: "result" as const } : {}),
+      command: args.command as "imagine" | "zap",
+      ...(latestDraw ? { inputMediaId: latestDraw.media._id, inputCategory: "result" as const } : {}),
     });
     if (admitted.state !== "awaiting_payment") return admitted;
     const priorOrders = await ctx.db.query("creativeTopups").withIndex("by_user_created", q => q.eq("userId", args.userId)).collect();
@@ -1095,13 +1123,13 @@ async function latestDrawOutputForThread(
   nowMs: number,
 ) {
   const jobs = await ctx.db.query("creativeJobs")
-    .withIndex("by_user_created", q => q.eq("userId", userId))
+    .withIndex("by_user_thread_created", q => q.eq("userId", userId).eq("threadId", threadId))
     .order("desc")
-    .take(100);
+    .take(50);
   for (const job of jobs) {
     if (job.command !== "draw" || job.threadId !== threadId || !job.outputMediaId || !["ready_for_save", "ready_for_delivery", "delivered"].includes(job.state)) continue;
     const media = await ctx.db.get(job.outputMediaId);
-    if (media && media.deletedAtMs === undefined && media.expiresAtMs > nowMs) return media._id;
+    if (media && media.deletedAtMs === undefined && media.expiresAtMs > nowMs) return { job, media };
   }
   return null;
 }

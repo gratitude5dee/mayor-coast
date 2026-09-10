@@ -64,7 +64,7 @@ export class ConvexCoastApplicationService implements CoastApplicationService {
       ),
       receivedAtMs: input.receivedAtMs,
     };
-    const drawLaunch = input.creativeCommand === "draw"
+    const drawLaunch = input.creativeCommand === "draw" || input.creativeCommand === "edit"
       ? (() => {
           const secret = createDrawLaunchSecret();
           return {

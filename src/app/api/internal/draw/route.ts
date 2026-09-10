@@ -42,7 +42,7 @@ const canarySchema = z.object({
 }).strict();
 
 type Outcome = "definitive" | "retryable" | "unknown";
-type Payload = { prompt?: unknown; inputMediaId?: unknown; inputCategory?: unknown; mode?: unknown };
+type Payload = { prompt?: unknown; inputMediaId?: unknown; inputCategory?: unknown; mode?: unknown; messages?: unknown };
 
 function normalizedErrorCode(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && typeof error.code === "string") {
@@ -81,9 +81,21 @@ function workerFailure(error: unknown, submitted: boolean, providerRequestId?: s
 }
 
 function promptFrom(payload: Payload) {
-  return typeof payload.prompt === "string"
-    ? payload.prompt.replace(/[\u0000-\u001f]/gu, " ").trim().slice(0, 2_000)
-    : "";
+  const direct = typeof payload.prompt === "string" ? payload.prompt : null;
+  const message = Array.isArray(payload.messages)
+    ? [...payload.messages].reverse().find((item): item is { text?: unknown } => Boolean(item) && typeof item === "object" && "text" in item && typeof item.text === "string")?.text
+    : null;
+  const source = direct ?? (typeof message === "string" ? message : "");
+  return source.replace(/^\s*\/(?:edit|draw)\b/iu, "").replace(/[\u0000-\u001f]/gu, " ").trim().slice(0, 2_000);
+}
+
+function assembleInstructions(payloads: string[], env: ReturnType<typeof parseServerEnv>) {
+  const instructions = payloads.map((value) => promptFrom(JSON.parse(decryptCreativePayload(value, env.convexServiceSecret)) as Payload)).filter(Boolean);
+  const assembled = instructions.map((instruction, index) => index === instructions.length - 1
+    ? `Latest instruction (this overrides conflicting earlier instructions): ${instruction}`
+    : `Earlier branch instruction: ${instruction}`).join("\n");
+  if (assembled.length > 32_000) throw Object.assign(new Error("DRAW_CONTEXT_TOO_LONG"), { code: "DRAW_CONTEXT_TOO_LONG" });
+  return assembled;
 }
 
 function inputCategory(payload: Payload, imageId: Id<"creativeMedia"> | null): DrawInputCategory {
@@ -124,6 +136,17 @@ async function recordSubmission(
     nowMs: Date.now(),
   });
   if (!recorded) throw Object.assign(new Error("DRAW_STALE_ATTEMPT"), { code: "DRAW_STALE_ATTEMPT" });
+}
+
+async function drawProviderContext(env: ReturnType<typeof parseServerEnv>, jobId: string) {
+  // This service-only call returns ciphertext. It deliberately cannot be used
+  // by a browser session, admin view, or provider URL.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const context = await getConvexHttpClient(env.CONVEX_URL).action((api.service as any).getDrawProviderContext, {
+    serviceSecret: env.convexServiceSecret, jobId,
+  }) as { drawApiMode: "images" | "responses" | "turbo"; drawMode: z.infer<typeof DrawModeSchema>; encryptedPayloads: string[] } | null;
+  if (!context) throw Object.assign(new Error("DRAW_CONTEXT_UNAVAILABLE"), { code: "DRAW_CONTEXT_UNAVAILABLE" });
+  return context;
 }
 
 async function putJpeg(path: string, bytes: Buffer, quality: number) {
@@ -199,9 +222,10 @@ export async function POST(request: Request): Promise<Response> {
 
     const input = inputSchema.parse(rawInput);
     const payload = JSON.parse(decryptCreativePayload(input.encryptedPayload, env.convexServiceSecret)) as Payload;
-    const mode = DrawModeSchema.catch("fast").parse(payload.mode);
+    const persistedContext = await drawProviderContext(env, input.jobId);
+    const mode = DrawModeSchema.catch(persistedContext.drawMode).parse(payload.mode ?? persistedContext.drawMode);
     const imageId = typeof payload.inputMediaId === "string" ? payload.inputMediaId as Id<"creativeMedia"> : null;
-    const prompt = promptFrom(payload);
+    const prompt = assembleInstructions(persistedContext.encryptedPayloads, env) || promptFrom(payload);
     if (!imageId && !prompt) throw Object.assign(new Error("DRAW_PROMPT_REQUIRED"), { code: "DRAW_PROMPT_REQUIRED" });
     const category = inputCategory(payload, imageId);
 
@@ -235,19 +259,39 @@ export async function POST(request: Request): Promise<Response> {
     const settings = drawImageSettings(mode);
     const model = mode === "hq" ? settings.model : env.COAST_DRAW_MODEL || settings.model;
     const client = new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0, timeout: 240_000 });
-    const streamResponse = imageId
+    const shouldUseResponses = persistedContext.drawApiMode === "responses";
+    if (shouldUseResponses && !imageId) throw Object.assign(new Error("DRAW_PARENT_UNAVAILABLE"), { code: "DRAW_PARENT_UNAVAILABLE" });
+    const streamResponse = shouldUseResponses
       ? await (async () => {
-        const media = await privateInput(env, imageId);
-        return client.images.edit({
-          model,
-          image: await toFile(media.bytes, "coast-draw.png", { type: media.mimeType }),
-          prompt: prompt || "Turn this sketch into a finished image. Preserve its composition and intentional details.",
-          size: settings.size, quality: settings.quality, output_format: settings.outputFormat, output_compression: settings.outputCompression, stream: true, partial_images: settings.partialImages,
+        const media = await privateInput(env, imageId!);
+        // The app constructs context explicitly. No previous_response_id or
+        // stored OpenAI conversation can retain a user's branch after expiry.
+        return client.responses.create({
+          model: process.env.COAST_DRAW_MULTITURN_MODEL || "gpt-5.6-luna",
+          reasoning: { effort: "none" },
+          store: false,
+          stream: true,
+          tool_choice: { type: "image_generation" },
+          input: [{ role: "user", content: [
+            { type: "input_text", text: prompt || "Refine this image while preserving its composition." },
+            { type: "input_image", image_url: `data:${media.mimeType};base64,${media.bytes.toString("base64")}`, detail: "high" },
+          ] }],
+          tools: [{ type: "image_generation", action: "edit", model, quality: settings.quality, output_format: settings.outputFormat, output_compression: settings.outputCompression, size: settings.size, partial_images: settings.partialImages }],
         }).withResponse();
       })()
-      : await client.images.generate({
-        model, prompt, size: settings.size, quality: settings.quality, output_format: settings.outputFormat, output_compression: settings.outputCompression, stream: true, partial_images: settings.partialImages,
-      }).withResponse();
+      : imageId
+        ? await (async () => {
+          const media = await privateInput(env, imageId);
+          return client.images.edit({
+            model,
+            image: await toFile(media.bytes, "coast-draw.png", { type: media.mimeType }),
+            prompt: prompt || "Turn this sketch into a finished image. Preserve its composition and intentional details.",
+            size: settings.size, quality: settings.quality, output_format: settings.outputFormat, output_compression: settings.outputCompression, stream: true, partial_images: settings.partialImages,
+          }).withResponse();
+        })()
+        : await client.images.generate({
+          model, prompt, size: settings.size, quality: settings.quality, output_format: settings.outputFormat, output_compression: settings.outputCompression, stream: true, partial_images: settings.partialImages,
+        }).withResponse();
     providerRequestId = streamResponse.request_id ?? streamResponse.response.headers.get("x-request-id") ?? undefined;
     // A stream without an OpenAI diagnostic ID is an unknown submission, never
     // a candidate for automatic replacement.
@@ -256,7 +300,8 @@ export async function POST(request: Request): Promise<Response> {
     await recordSubmission(env, input, providerRequestId, model, "running");
     const convex = getConvexHttpClient(env.CONVEX_URL);
     let finalBase64: string | undefined;
-    for await (const rawEvent of streamResponse.data) {
+    const streamEvents = streamResponse.data as AsyncIterable<{ type?: unknown; b64_json?: unknown; partial_image_index?: unknown; partial_image_b64?: unknown; response?: unknown }>;
+    for await (const rawEvent of streamEvents) {
       const event = drawStreamEvent(rawEvent);
       if (!event) continue;
       if (event.kind === "completed") { finalBase64 = event.base64; continue; }

@@ -42,12 +42,27 @@ export function resolveDrawProvider(mode: DrawMode, configuredFlareModel?: strin
   };
 }
 
-export function drawStreamEvent(event: { type?: unknown; b64_json?: unknown; partial_image_index?: unknown }) {
+export type DrawStreamEvent =
+  | { kind: "completed"; base64: string }
+  | { kind: "preview"; base64: string; index: number };
+
+export function drawStreamEvent(event: { type?: unknown; b64_json?: unknown; partial_image_index?: unknown; partial_image_b64?: unknown; response?: unknown }): DrawStreamEvent | null {
+  const type = event.type;
+  const partialBase64 = typeof event.partial_image_b64 === "string" ? event.partial_image_b64 : event.b64_json;
+  if (type === "response.image_generation_call.partial_image" && typeof partialBase64 === "string" && partialBase64.length > 0) {
+    return { kind: "preview" as const, base64: partialBase64, index: typeof event.partial_image_index === "number" ? event.partial_image_index : 0 };
+  }
+  if (type === "response.completed" && event.response && typeof event.response === "object") {
+    const output = "output" in event.response && Array.isArray(event.response.output) ? event.response.output : [];
+    const image = output.find((item): item is { type: string; status?: string; result: string } => Boolean(item) && typeof item === "object" && "type" in item && item.type === "image_generation_call" && item.status === "completed" && "result" in item && typeof item.result === "string");
+    if (image?.result) return { kind: "completed" as const, base64: image.result };
+    return null;
+  }
   if (typeof event.b64_json !== "string" || event.b64_json.length === 0) return null;
-  if (event.type === "image_generation.completed" || event.type === "image_edit.completed") {
+  if (type === "image_generation.completed" || type === "image_edit.completed") {
     return { kind: "completed" as const, base64: event.b64_json };
   }
-  if (event.type === "image_generation.partial_image" || event.type === "image_edit.partial_image") {
+  if (type === "image_generation.partial_image" || type === "image_edit.partial_image") {
     return {
       kind: "preview" as const,
       base64: event.b64_json,

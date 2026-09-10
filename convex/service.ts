@@ -66,7 +66,7 @@ export const claimInbound = action({
     unsupportedContent: v.optional(
       v.union(v.literal("attachment"), v.literal("private_location")),
     ),
-    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"))),
+    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"), v.literal("edit"))),
     creativeCommandAmbiguous: v.optional(v.boolean()),
     animateLatestDraw: v.optional(v.boolean()),
     encryptedCreativePayload: v.optional(v.string()),
@@ -124,7 +124,7 @@ export const getDrawSession: any = action({
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const admitDrawGeneration: any = action({
-  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"), v.literal("hq")), inputMediaId: v.optional(v.id("creativeMedia")), inputCategory: v.optional(v.union(v.literal("prompt"), v.literal("sketch"), v.literal("photo"), v.literal("result"))), nowMs: v.number() },
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), requestFingerprint: v.string(), encryptedPayload: v.string(), mode: v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"), v.literal("hq")), inputMediaId: v.optional(v.id("creativeMedia")), inputCategory: v.optional(v.union(v.literal("prompt"), v.literal("sketch"), v.literal("photo"), v.literal("result"))), parentJobId: v.optional(v.id("creativeJobs")), resetContext: v.optional(v.boolean()), nowMs: v.number() },
   returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
   handler: async (ctx, args) => {
     assertServiceSecret(args.serviceSecret);
@@ -133,10 +133,12 @@ export const admitDrawGeneration: any = action({
       browserTokenHash: args.browserTokenHash,
       requestKey: args.requestKey,
       encryptedPayload: args.encryptedPayload,
-      prompt: args.prompt,
+      requestFingerprint: args.requestFingerprint,
       mode: args.mode,
       ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}),
       ...(args.inputCategory ? { inputCategory: args.inputCategory } : {}),
+      ...(args.parentJobId ? { parentJobId: args.parentJobId } : {}),
+      ...(args.resetContext ? { resetContext: true } : {}),
       nowMs: args.nowMs,
     });
   },
@@ -155,6 +157,27 @@ export const listDrawEvents: any = action({
       nowMs: args.nowMs,
     });
   },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const listDrawRevisions: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), cursor: v.optional(v.number()), nowMs: v.number() },
+  returns: v.any(),
+  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runQuery(internal.creative.listDrawRevisions, { sessionId: args.sessionId, browserTokenHash: args.browserTokenHash, ...(args.cursor === undefined ? {} : { cursor: args.cursor }), nowMs: args.nowMs }); },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const getDrawRevisionInstruction: any = action({
+  args: { serviceSecret: v.string(), sessionId: v.id("drawSessions"), browserTokenHash: v.string(), jobId: v.id("creativeJobs"), nowMs: v.number() },
+  returns: v.any(),
+  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runQuery(internal.creative.getDrawRevisionInstruction, { sessionId: args.sessionId, browserTokenHash: args.browserTokenHash, jobId: args.jobId, nowMs: args.nowMs }); },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const getDrawProviderContext: any = action({
+  args: { serviceSecret: v.string(), jobId: v.id("creativeJobs") },
+  returns: v.any(),
+  handler: async (ctx, args) => { assertServiceSecret(args.serviceSecret); return await ctx.runQuery(internal.creative.getDrawProviderContext, { jobId: args.jobId }); },
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -274,12 +297,7 @@ export const getAuthorizedDrawMedia: any = action({
   returns: v.union(v.object({ sourceUrl: v.string(), mimeType: v.string(), filename: v.string(), expiresAtMs: v.number() }), v.null()),
   handler: async (ctx, args) => {
     assertServiceSecret(args.serviceSecret);
-    const session = await ctx.runQuery(internal.creative.getDrawSession, { sessionId: args.sessionId, browserTokenHash: args.browserTokenHash, nowMs: args.nowMs });
-    if (!session) return null;
-    const media = await ctx.runQuery(internal.creative.getMedia, { mediaId: args.mediaId, nowMs: args.nowMs });
-    if (!media) return null;
-    const manifest = await ctx.runQuery(internal.creative.getDrawMediaIdentity, { mediaId: args.mediaId });
-    return manifest?.drawSessionId === args.sessionId ? media : null;
+    return await ctx.runQuery(internal.creative.getAuthorizedDrawMedia, { sessionId: args.sessionId, browserTokenHash: args.browserTokenHash, mediaId: args.mediaId, nowMs: args.nowMs });
   },
 });
 

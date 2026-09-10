@@ -239,6 +239,15 @@ export default defineSchema({
     drawMode: v.optional(v.union(v.literal("fast"), v.literal("detailed"), v.literal("turbo"), v.literal("hq"))),
     providerModel: v.optional(v.string()),
     revisionKey: v.optional(v.string()),
+    // Draw revision ancestry is metadata only; each instruction remains inside
+    // encryptedPayload and is never copied into operational records.
+    parentJobId: v.optional(v.id("creativeJobs")),
+    rootJobId: v.optional(v.id("creativeJobs")),
+    revisionNumber: v.optional(v.number()),
+    contextReset: v.optional(v.boolean()),
+    drawApiMode: v.optional(v.union(v.literal("images"), v.literal("responses"), v.literal("turbo"))),
+    currentPreviewMediaId: v.optional(v.id("creativeMedia")),
+    requestFingerprint: v.optional(v.string()),
     inputMediaId: v.optional(v.id("creativeMedia")),
     inputCategory: v.optional(v.union(v.literal("prompt"), v.literal("sketch"), v.literal("photo"), v.literal("result"))),
     outputMediaId: v.optional(v.id("creativeMedia")),
@@ -270,7 +279,9 @@ export default defineSchema({
     .index("by_delivery", ["deliveryId"])
     .index("by_user_created", ["userId", "createdAtMs"])
     .index("by_user_state", ["userId", "state"])
+    .index("by_user_thread_created", ["userId", "threadId", "createdAtMs"])
     .index("by_session_created", ["drawSessionId", "createdAtMs"])
+    .index("by_root_revision", ["rootJobId", "revisionNumber"])
     .index("by_lease", ["state", "leaseExpiresAtMs"])
     .index("by_expiry", ["state", "expiresAtMs"]),
 
@@ -358,7 +369,7 @@ export default defineSchema({
     previewIndex: v.optional(v.number()),
     errorCode: v.optional(v.string()),
     createdAtMs: v.number(),
-  }).index("by_session_created", ["sessionId", "createdAtMs"]).index("by_job_sequence", ["jobId", "sequence"]),
+  }).index("by_session_created", ["sessionId", "createdAtMs"]).index("by_session_sequence", ["sessionId", "sequence"]).index("by_job_sequence", ["jobId", "sequence"]),
 
   creativeCreditLedger: defineTable({
     userId: v.id("coastUsers"),
@@ -540,7 +551,7 @@ export default defineSchema({
     /** Clarification answers in this discovery lineage; hard-capped at two. */
     clarificationDepth: v.optional(v.number()),
     origin: v.optional(v.union(v.literal("inbound"), v.literal("proactive"))),
-    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"))),
+    creativeCommand: v.optional(v.union(v.literal("imagine"), v.literal("zap"), v.literal("draw"), v.literal("edit"))),
     checkInId: v.optional(v.id("coastCheckIns")),
     plan: v.optional(turnPlan),
     scheduledForMs: v.number(),

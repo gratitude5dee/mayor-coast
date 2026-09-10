@@ -30,6 +30,11 @@ describe("creative commands and credits", () => {
       { id: "image-1", kind: "image", mimeType: "image/jpeg", byteLength: 100 },
     ]);
     expect(result).toMatchObject({ command: "imagine", prompt: "make it cinematic" });
+    expect(parseCreativeRequest("/edit make the sky sunset")).toMatchObject({ command: "edit", prompt: "make the sky sunset" });
+    expect(parseCreativeRequest("/edit warm it up", [
+      { id: "image-1", kind: "image", mimeType: "image/jpeg", byteLength: 100 },
+      { id: "image-2", kind: "image", mimeType: "image/jpeg", byteLength: 100 },
+    ])).toEqual({ error: "/edit accepts one image, or edits your latest COAST Draw result." });
   });
 
   it("rejects audio-only /zap and over-limit media", () => {
@@ -100,6 +105,9 @@ describe("creative commands and credits", () => {
     expect(drawStreamEvent({ type: "image_edit.partial_image", b64_json: "preview", partial_image_index: 1 })).toMatchObject({ kind: "preview", index: 1 });
     expect(drawStreamEvent({ type: "image_generation.completed", b64_json: "final" })).toEqual({ kind: "completed", base64: "final" });
     expect(drawStreamEvent({ type: "image_generation.partial_image", b64_json: "preview" })).not.toMatchObject({ kind: "completed" });
+    expect(drawStreamEvent({ type: "response.image_generation_call.partial_image", partial_image_b64: "response-preview", partial_image_index: 1 })).toEqual({ kind: "preview", base64: "response-preview", index: 1 });
+    expect(drawStreamEvent({ type: "response.completed", response: { output: [{ type: "image_generation_call", status: "completed", result: "response-final" }] } })).toEqual({ kind: "completed", base64: "response-final" });
+    expect(drawStreamEvent({ type: "response.completed", response: { output: [] } })).toBeNull();
   });
 
   it("accepts the fenced Convex worker envelope", () => {

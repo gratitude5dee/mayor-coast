@@ -110,13 +110,18 @@ export async function appendCreativeLedger(ctx: MutationCtx, args: { userId: Id<
   return true;
 }
 
-type AdmissionArgs = { userId: Id<"coastUsers">; threadId: Id<"coastThreads">; sourceMessageId: Id<"coastMessages">; turnId: Id<"coastTurns">; requestKey: string; command: CreativeCommand; encryptedPayload: string; nowMs: number; drawSessionId?: Id<"drawSessions">; drawMode?: "fast" | "detailed" | "turbo" | "hq"; revisionKey?: string; inputMediaId?: Id<"creativeMedia">; inputCategory?: "prompt" | "sketch" | "photo" | "result"; resumeJobId?: Id<"creativeJobs"> };
+type AdmissionArgs = { userId: Id<"coastUsers">; threadId: Id<"coastThreads">; sourceMessageId: Id<"coastMessages">; turnId: Id<"coastTurns">; requestKey: string; command: CreativeCommand; encryptedPayload: string; nowMs: number; drawSessionId?: Id<"drawSessions">; drawMode?: "fast" | "detailed" | "turbo" | "hq"; revisionKey?: string; inputMediaId?: Id<"creativeMedia">; inputCategory?: "prompt" | "sketch" | "photo" | "result"; parentJobId?: Id<"creativeJobs">; rootJobId?: Id<"creativeJobs">; revisionNumber?: number; contextReset?: boolean; drawApiMode?: "images" | "responses" | "turbo"; requestFingerprint?: string; resumeJobId?: Id<"creativeJobs"> };
 export type AdmissionResult = { jobId: Id<"creativeJobs">; state: string; source: "free" | "credit" | "payment"; amountCents: number };
 export async function admitCreativeJob(ctx: MutationCtx, args: AdmissionArgs): Promise<AdmissionResult> {
   const user = await ctx.db.get(args.userId);
   if (!user || user.status !== "active") throw new Error("CREATIVE_USER_INACTIVE");
   const existing = await ctx.db.query("creativeJobs").withIndex("by_request_key", q => q.eq("requestKey", args.requestKey)).unique();
-  if (existing && existing._id !== args.resumeJobId) return { jobId: existing._id, state: existing.state, source: existing.reservationSource, amountCents: existing.reservedCents };
+  if (existing && existing._id !== args.resumeJobId) {
+    if (args.requestFingerprint && existing.requestFingerprint && existing.requestFingerprint !== args.requestFingerprint) {
+      throw new Error("CREATIVE_REQUEST_KEY_CONFLICT");
+    }
+    return { jobId: existing._id, state: existing.state, source: existing.reservationSource, amountCents: existing.reservedCents };
+  }
   if (args.resumeJobId && (!existing || existing.state !== "awaiting_payment" || existing.expiresAtMs <= args.nowMs)) throw new Error("CREATIVE_RESUME_INVALID");
   const account = await reconcileCreativeAccount(ctx, args.userId, args.nowMs);
   const active = await findActiveJobForSlot(ctx, args.userId, account, slotFor(args.command));
@@ -138,10 +143,22 @@ export async function admitCreativeJob(ctx: MutationCtx, args: AdmissionArgs): P
     ...(args.drawMode ? { drawMode: args.drawMode } : {}),
     ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}),
     ...(args.inputCategory ? { inputCategory: args.inputCategory } : {}),
+    ...(args.parentJobId ? { parentJobId: args.parentJobId } : {}),
+    ...(args.rootJobId ? { rootJobId: args.rootJobId } : {}),
+    ...(args.revisionNumber ? { revisionNumber: args.revisionNumber } : {}),
+    ...(args.contextReset ? { contextReset: true } : {}),
+    ...(args.drawApiMode ? { drawApiMode: args.drawApiMode } : {}),
+    ...(args.requestFingerprint ? { requestFingerprint: args.requestFingerprint } : {}),
     admittedAtMs: args.nowMs,
     createdAtMs: args.nowMs, expiresAtMs: args.nowMs + CREATIVE_DAY_MS,
   });
   if (existing) await ctx.db.patch(jobId, fields);
+  // A root job can only learn its id after insertion. Persisting it gives
+  // revisions an indexed, stable branch without inferring ancestry for older
+  // records.
+  if (!existing && args.command === "draw" && !args.rootJobId) {
+    await ctx.db.patch(jobId, { rootJobId: jobId, revisionNumber: args.revisionNumber ?? 1 });
+  }
   // A request waiting for payment is deliberately not a generation lock. It
   // may coexist with independently-funded work in either media slot.
   if (state === "admitted") {

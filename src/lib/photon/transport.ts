@@ -46,11 +46,11 @@ export function createCoastInboundHandler(
 
     const inboundMessages = [...(context?.skipped ?? []), message];
     const creativeTokens = inboundMessages.flatMap((candidate) =>
-      [...candidate.text.matchAll(/(?:^|\s)\/(imagine|zap|draw)\b/giu)]
+      [...candidate.text.matchAll(/(?:^|\s)\/(imagine|zap|draw|edit)\b/giu)]
         .map((match) => match[1]?.toLowerCase())
         .filter(
-          (value): value is "imagine" | "zap" | "draw" =>
-            value === "imagine" || value === "zap" || value === "draw",
+          (value): value is "imagine" | "zap" | "draw" | "edit" =>
+            value === "imagine" || value === "zap" || value === "draw" || value === "edit",
         ),
     );
     const creativeCommands = [...new Set(creativeTokens)];

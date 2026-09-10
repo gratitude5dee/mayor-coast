@@ -187,6 +187,25 @@ export const getDrawMediaIdentity = internalQuery({
   },
 });
 
+// A revision opened from `/edit` lives in a new Draw session but may display
+// an ancestor artifact from the same user/thread/root. The root comparison is
+// the ownership proof; arbitrary same-user media is never sufficient.
+export const getAuthorizedDrawMedia = internalQuery({
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), mediaId: v.id("creativeMedia"), nowMs: v.number() },
+  returns: v.union(v.object({ sourceUrl: v.string(), mimeType: v.string(), filename: v.string(), expiresAtMs: v.number() }), v.null()),
+  handler: async (ctx, args) => {
+    const [session, media] = await Promise.all([ctx.db.get(args.sessionId), ctx.db.get(args.mediaId)]);
+    if (!session || !media || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs <= args.nowMs || media.deletedAtMs !== undefined || media.expiresAtMs <= args.nowMs || media.userId !== session.userId || media.threadId !== session.threadId) return null;
+    if (media.drawSessionId === session._id) return { sourceUrl: media.sourceUrl, mimeType: media.mimeType, filename: media.filename, expiresAtMs: media.expiresAtMs };
+    if (!media.jobId || !session.latestJobId) return null;
+    const [mediaJob, latestJob] = await Promise.all([ctx.db.get(media.jobId), ctx.db.get(session.latestJobId)]);
+    const mediaRoot = mediaJob?.rootJobId ?? mediaJob?._id;
+    const latestRoot = latestJob?.rootJobId ?? latestJob?._id;
+    if (!mediaRoot || !latestRoot || mediaRoot !== latestRoot) return null;
+    return { sourceUrl: media.sourceUrl, mimeType: media.mimeType, filename: media.filename, expiresAtMs: media.expiresAtMs };
+  },
+});
+
 // This is deliberately narrower than browser media access: Fal receives a
 // short-lived signed URL that can read only the input attached to its current
 // Draw job. The route still verifies cancellation, job identity, and expiry.
@@ -234,12 +253,31 @@ export const createDrawMedia = internalMutation({
 });
 
 export const admitDrawGeneration = internalMutation({
-  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), encryptedPayload: v.string(), prompt: v.string(), mode: drawMode, inputMediaId: v.optional(v.id("creativeMedia")), inputCategory: v.optional(v.union(v.literal("prompt"), v.literal("sketch"), v.literal("photo"), v.literal("result"))), nowMs: v.number() },
+  // Prompt text is encrypted at Vercel. Convex only receives opaque payloads
+  // and relationship metadata needed for transactional admission.
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), requestKey: v.string(), requestFingerprint: v.string(), encryptedPayload: v.string(), mode: drawMode, inputMediaId: v.optional(v.id("creativeMedia")), inputCategory: v.optional(v.union(v.literal("prompt"), v.literal("sketch"), v.literal("photo"), v.literal("result"))), parentJobId: v.optional(v.id("creativeJobs")), resetContext: v.optional(v.boolean()), nowMs: v.number() },
   returns: v.object({ jobId: v.id("creativeJobs"), state: v.string(), source: v.string(), amountCents: v.number() }),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
     if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) throw new Error("DRAW_SESSION_INVALID");
-    const result = await admitCreativeJob(ctx, { userId: session.userId, threadId: session.threadId, sourceMessageId: session.sourceMessageId, turnId: session.turnId, requestKey: args.requestKey, command: "draw", encryptedPayload: args.encryptedPayload, nowMs: args.nowMs, drawSessionId: session._id, drawMode: args.mode, ...(args.inputMediaId ? { inputMediaId: args.inputMediaId } : {}), ...(args.inputCategory ? { inputCategory: args.inputCategory } : {}), revisionKey: args.requestKey });
+    const parent = args.parentJobId ? await ctx.db.get(args.parentJobId) : null;
+    if (args.parentJobId && (!parent || parent.command !== "draw" || parent.userId !== session.userId || parent.threadId !== session.threadId || !parent.outputMediaId || !["ready_for_save", "ready_for_delivery", "delivered"].includes(parent.state))) {
+      throw new Error("DRAW_PARENT_UNAVAILABLE");
+    }
+    const parentMedia = parent?.outputMediaId ? await ctx.db.get(parent.outputMediaId) : null;
+    if (parent && (!parentMedia || parentMedia.deletedAtMs !== undefined || parentMedia.expiresAtMs <= args.nowMs)) throw new Error("DRAW_PARENT_EXPIRED");
+    const inheritedInput = args.inputMediaId ?? parent?.outputMediaId;
+    const rootJobId = parent ? (parent.rootJobId ?? parent._id) : undefined;
+    const revisionNumber = parent ? (parent.revisionNumber ?? 1) + 1 : 1;
+    const drawApiMode = args.mode === "turbo" ? "turbo" as const : parent && process.env.COAST_DRAW_MULTITURN_ENABLED === "true" ? "responses" as const : "images" as const;
+    const result = await admitCreativeJob(ctx, {
+      userId: session.userId, threadId: session.threadId, sourceMessageId: session.sourceMessageId, turnId: session.turnId,
+      requestKey: args.requestKey, requestFingerprint: args.requestFingerprint, command: "draw", encryptedPayload: args.encryptedPayload,
+      nowMs: args.nowMs, drawSessionId: session._id, drawMode: args.mode, revisionKey: args.requestKey, drawApiMode,
+      ...(inheritedInput ? { inputMediaId: inheritedInput } : {}),
+      ...(args.inputCategory ? { inputCategory: args.inputCategory } : parent ? { inputCategory: "result" as const } : {}),
+      ...(parent ? { parentJobId: parent._id, ...(rootJobId ? { rootJobId } : {}), revisionNumber, ...(args.resetContext ? { contextReset: true } : {}) } : { revisionNumber }),
+    });
     const sequence = await nextDrawEventSequence(ctx, session._id);
     await ctx.db.patch(session._id, { activeJobId: result.jobId, latestJobId: result.jobId, updatedAtMs: args.nowMs });
     await ctx.db.insert("drawEvents", { sessionId: session._id, jobId: result.jobId, sequence, kind: "state", state: result.state, createdAtMs: args.nowMs });
@@ -280,14 +318,14 @@ export const listDrawEvents = internalQuery({
     const session = await ctx.db.get(args.sessionId);
     if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) return null;
     const events = await ctx.db.query("drawEvents").withIndex("by_session_created", q => q.eq("sessionId", args.sessionId)).collect();
-    const filtered = events.filter(item => item.sequence > (args.afterSequence ?? -1)).sort((a,b) => a.sequence-b.sequence).slice(0, 50);
+    const filtered = await ctx.db.query("drawEvents").withIndex("by_session_sequence", q => q.eq("sessionId", args.sessionId).gt("sequence", args.afterSequence ?? -1)).take(50);
     const latestJob = session.latestJobId ? await ctx.db.get(session.latestJobId) : null;
     const latestPreview = latestJob
       ? events.filter(item => item.jobId === latestJob._id && item.kind === "preview" && item.mediaId).sort((a, b) => b.sequence - a.sequence)[0]
       : undefined;
     return {
       events: filtered.map(item => ({ jobId: item.jobId, sequence: item.sequence, kind: item.kind, state: item.state, mediaId: item.mediaId ?? null, previewIndex: item.previewIndex ?? null, errorCode: item.errorCode ?? null })),
-      latest: events.length ? Math.max(...events.map(item => item.sequence)) : null,
+      latest: session.eventSequence ?? (events.length ? Math.max(...events.map(item => item.sequence)) : null),
       activeJobId: session.activeJobId ?? null,
       latestJobId: session.latestJobId ?? null,
       initialMediaId: session.initialMediaId ?? null,
@@ -299,6 +337,38 @@ export const listDrawEvents = internalQuery({
         errorCode: latestJob.lastErrorCode ?? null,
       } : null,
     };
+  },
+});
+
+export const listDrawRevisions = internalQuery({
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), cursor: v.optional(v.number()), nowMs: v.number() },
+  returns: v.union(v.object({ revisions: v.array(v.object({ jobId: v.id("creativeJobs"), parentJobId: v.union(v.id("creativeJobs"), v.null()), rootJobId: v.union(v.id("creativeJobs"), v.null()), revisionNumber: v.number(), mode: v.union(drawMode, v.null()), model: v.union(v.string(), v.null()), state: v.string(), outputMediaId: v.union(v.id("creativeMedia"), v.null()), previewMediaId: v.union(v.id("creativeMedia"), v.null()), createdAtMs: v.number() })), nextCursor: v.union(v.number(), v.null()) }), v.null()),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    if (!session || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs) return null;
+    const newest = session.latestJobId ? await ctx.db.get(session.latestJobId) : null;
+    const root = newest?.rootJobId ?? newest?._id;
+    if (!root) return { revisions: [], nextCursor: null };
+    const all = await ctx.db.query("creativeJobs").withIndex("by_root_revision", q => q.eq("rootJobId", root)).collect();
+    const ordered = all.sort((left, right) => (left.revisionNumber ?? 1) - (right.revisionNumber ?? 1));
+    const cursor = Math.max(0, args.cursor ?? 0);
+    const page = ordered.slice(cursor, cursor + 50);
+    const revisions = await Promise.all(page.map(async (job) => {
+      const previews = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
+      const preview = previews.filter(event => event.kind === "preview" && event.mediaId).sort((a, b) => b.sequence - a.sequence)[0];
+      return { jobId: job._id, parentJobId: job.parentJobId ?? null, rootJobId: job.rootJobId ?? null, revisionNumber: job.revisionNumber ?? 1, mode: job.drawMode ?? null, model: job.providerModel ?? null, state: job.state, outputMediaId: job.outputMediaId ?? null, previewMediaId: preview?.mediaId ?? job.currentPreviewMediaId ?? null, createdAtMs: job.createdAtMs };
+    }));
+    return { revisions, nextCursor: cursor + page.length < ordered.length ? cursor + page.length : null };
+  },
+});
+
+export const getDrawRevisionInstruction = internalQuery({
+  args: { sessionId: v.id("drawSessions"), browserTokenHash: v.string(), jobId: v.id("creativeJobs"), nowMs: v.number() },
+  returns: v.union(v.object({ encryptedPayload: v.string() }), v.null()),
+  handler: async (ctx, args) => {
+    const [session, job] = await Promise.all([ctx.db.get(args.sessionId), ctx.db.get(args.jobId)]);
+    if (!session || !job || session.status !== "active" || session.browserTokenHash !== args.browserTokenHash || session.expiresAtMs < args.nowMs || job.userId !== session.userId || job.threadId !== session.threadId || job.command !== "draw") return null;
+    return { encryptedPayload: job.encryptedPayload };
   },
 });
 
@@ -394,6 +464,25 @@ export const claimForProcessing = internalMutation({
   },
 });
 
+export const getDrawProviderContext = internalQuery({
+  args: { jobId: v.id("creativeJobs") },
+  returns: v.union(v.object({ drawApiMode: v.union(v.literal("images"), v.literal("responses"), v.literal("turbo")), drawMode, encryptedPayloads: v.array(v.string()) }), v.null()),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.command !== "draw") return null;
+    const payloads: string[] = [];
+    let cursor: typeof job | null = job;
+    // Bounded ancestry prevents a malformed cycle from pinning a worker. The
+    // worker applies the separate 32k instruction limit after decryption.
+    for (let depth = 0; cursor && depth < 64; depth += 1) {
+      payloads.push(cursor.encryptedPayload);
+      if (cursor.contextReset || !cursor.parentJobId) break;
+      cursor = await ctx.db.get(cursor.parentJobId);
+    }
+    return { drawApiMode: job.drawApiMode ?? (job.drawMode === "turbo" ? "turbo" : "images"), drawMode: job.drawMode ?? "fast", encryptedPayloads: payloads.reverse() };
+  },
+});
+
 const processingOwnership = {
   jobId: v.id("creativeJobs"),
   attemptId: v.string(),
@@ -430,7 +519,11 @@ export const recordDrawPreview = internalMutation({
     const job = await ctx.db.get(args.jobId);
     if (!job || job.command !== "draw" || job.state !== "running" || !job.drawSessionId || job.attemptId !== args.attemptId || job.fencingToken !== args.fencingToken) return false;
     const priorEvents = await ctx.db.query("drawEvents").withIndex("by_job_sequence", q => q.eq("jobId", job._id)).collect();
-    if (priorEvents.some(event => event.kind === "preview" && event.previewIndex === args.previewIndex)) return true;
+    const priorPreviewIndexes = priorEvents.filter(event => event.kind === "preview" && event.previewIndex !== undefined).map(event => event.previewIndex as number);
+    // A provider can replay a partial after reconnecting. It must not replace
+    // a newer preview or leak another private object.
+    if (priorPreviewIndexes.includes(args.previewIndex)) return true;
+    if (priorPreviewIndexes.some(index => index > args.previewIndex)) return false;
     const retireAtMs = args.nowMs + 15 * 60_000;
     for (const event of priorEvents) {
       if (event.kind !== "preview" || !event.mediaId) continue;
@@ -453,7 +546,7 @@ export const recordDrawPreview = internalMutation({
     });
     const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
     await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "preview", state: "running", mediaId, previewIndex: args.previewIndex, createdAtMs: args.nowMs });
-    await ctx.db.patch(job._id, { eventSequence: sequence, heartbeatAtMs: args.nowMs, firstPreviewAtMs: job.firstPreviewAtMs ?? args.nowMs, updatedAtMs: args.nowMs });
+    await ctx.db.patch(job._id, { currentPreviewMediaId: mediaId, eventSequence: sequence, heartbeatAtMs: args.nowMs, firstPreviewAtMs: job.firstPreviewAtMs ?? args.nowMs, updatedAtMs: args.nowMs });
     return true;
   },
 });
@@ -624,7 +717,7 @@ export const completeProcessing = internalMutation({
       const finalizingSequence = await nextDrawEventSequence(ctx, job.drawSessionId);
       await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence: finalizingSequence, kind: "state", state: "finalizing", createdAtMs: args.nowMs });
       const sequence = await nextDrawEventSequence(ctx, job.drawSessionId);
-      await ctx.db.patch(job._id, { state: "ready_for_save", outputMediaId: mediaId, completedAtMs: args.nowMs, eventSequence: sequence, updatedAtMs: args.nowMs });
+      await ctx.db.patch(job._id, { state: "ready_for_save", outputMediaId: mediaId, currentPreviewMediaId: undefined, completedAtMs: args.nowMs, eventSequence: sequence, updatedAtMs: args.nowMs });
       await ctx.db.insert("drawEvents", { sessionId: job.drawSessionId, jobId: job._id, sequence, kind: "completed", state: "ready_for_save", mediaId, createdAtMs: args.nowMs });
       await ctx.db.patch(job.drawSessionId, { latestJobId: job._id, updatedAtMs: args.nowMs });
       // The customer consumes one image only when the private final artifact

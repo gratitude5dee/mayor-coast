@@ -28,6 +28,8 @@ const serverEnvSchema = z.object({
   COAST_DRAW_RUNTIME_URL: z.url().optional(),
   COAST_DRAW_ENABLED: z.enum(["true", "false"]).default("false"),
   COAST_DRAW_MODEL: z.string().min(1).default("gpt-image-2.5-flare"),
+  COAST_DRAW_MULTITURN_ENABLED: z.enum(["true", "false"]).default("false"),
+  COAST_DRAW_MULTITURN_MODEL: z.string().min(1).default("gpt-5.6-luna"),
   COAST_DRAW_TLDRAW_ENABLED: z.enum(["true", "false"]).default("false"),
   COAST_DRAW_TLDRAW_LICENSE_KEY: z.string().min(1).optional(),
   COAST_DRAW_APPLE_TEAM_ID: z.string().min(1).optional(),

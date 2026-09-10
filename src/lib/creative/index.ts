@@ -16,7 +16,9 @@ export const MAX_VIDEO_REFERENCES = 3;
 export const MAX_AUDIO_REFERENCES = 3;
 export const MAX_TOTAL_REFERENCES = 12;
 
-export const CreativeCommandSchema = z.enum(["imagine", "zap", "draw"]);
+// `edit` is an intake command. It always materializes as a Draw image job so
+// the durable worker and accounting model do not grow a second image pipeline.
+export const CreativeCommandSchema = z.enum(["imagine", "zap", "draw", "edit"]);
 export type CreativeCommand = z.infer<typeof CreativeCommandSchema>;
 
 export type CreativeAttachment = {
@@ -48,7 +50,7 @@ export type CreditLedgerEntry = {
 };
 
 export function parseCreativeCommand(text: string): CreativeCommand | null {
-  const match = /^\s*\/(imagine|zap|draw)(?:\s+|$)/iu.exec(text);
+  const match = /^\s*\/(imagine|zap|draw|edit)(?:\s+|$)/iu.exec(text);
   return match?.[1]?.toLowerCase() as CreativeCommand | undefined ?? null;
 }
 
@@ -57,8 +59,8 @@ export function parseCreativeRequest(
   attachments: CreativeAttachment[] = [],
 ): CreativeRequest | { error: string } {
   const command = parseCreativeCommand(text);
-  if (!command) return { error: "Send /imagine, /zap, or /draw to create media." };
-  const prompt = text.replace(/^\s*\/(?:imagine|zap|draw)\b/iu, "").trim();
+  if (!command) return { error: "Send /imagine, /zap, /draw, or /edit to create media." };
+  const prompt = text.replace(/^\s*\/(?:imagine|zap|draw|edit)\b/iu, "").trim();
   if (prompt.length === 0 && command !== "draw") return { error: `Tell me what to ${command}.` };
   if (prompt.length > 2_000) return { error: "That creative prompt is too long." };
   if (command === "imagine" && attachments.some((item) => item.kind !== "image")) {
@@ -71,6 +73,9 @@ export function parseCreativeRequest(
     if (attachments.some((item) => item.kind !== "image") || attachments.length > 1) {
       return { error: "/draw accepts one image canvas. Send only an image or draw in the card." };
     }
+  }
+  if (command === "edit" && (attachments.some((item) => item.kind !== "image") || attachments.length > 1)) {
+    return { error: "/edit accepts one image, or edits your latest COAST Draw result." };
   }
   if (command === "zap" && attachments.some((item) => item.kind === "audio") &&
       !attachments.some((item) => item.kind === "image" || item.kind === "video")) {
@@ -174,7 +179,7 @@ export type ProviderRequest = {
 };
 
 export function buildProviderRequest(request: CreativeRequest): ProviderRequest {
-  if (request.command === "draw") throw new Error("DRAW_USES_OPENAI_WORKER");
+  if (request.command === "draw" || request.command === "edit") throw new Error("DRAW_USES_OPENAI_WORKER");
   if (request.command === "imagine") {
     const image = request.attachments[0];
     return image

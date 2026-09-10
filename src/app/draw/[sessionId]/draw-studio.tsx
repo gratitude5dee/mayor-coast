@@ -27,6 +27,7 @@ type Props = { sessionId: string; tldrawEnabled?: boolean; tldrawLicenseKey?: st
 type Job = { id: string; state: string; outputUrl?: string; previewUrl?: string; errorCode?: string | null } | null;
 type EventItem = { jobId: string; sequence: number; kind: string; state: string; mediaId: string | null; previewIndex: number | null; errorCode: string | null };
 type JobSnapshot = { jobId: string; state: string; previewMediaId: string | null; outputMediaId: string | null; errorCode: string | null } | null;
+type Revision = { jobId: string; parentJobId: string | null; rootJobId: string | null; revisionNumber: number; mode: DrawMode | null; model: string | null; state: string; outputMediaId: string | null; previewMediaId: string | null; createdAtMs: number };
 
 const colors = ["#17231d", "#b45309", "#dc2626", "#2563eb", "#ffffff"];
 const mediaUrl = (sessionId: string, mediaId: string) => `/api/draw/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`;
@@ -40,6 +41,7 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   const currentRef = useRef<DrawPoint[]>([]);
   const lastSequenceRef = useRef(0);
   const requestKeyRef = useRef<string | null>(null);
+  const selectedRevisionRef = useRef<string | null>(typeof window === "undefined" ? null : window.sessionStorage.getItem(`coast-draw-revision:${sessionId}`));
   const preparingRef = useRef(false);
   const savingRef = useRef(false);
   const tldrawAdapterRef = useRef<RasterEditorAdapter | null>(null);
@@ -61,6 +63,10 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   const [backgroundKind, setBackgroundKind] = useState<"photo" | "result" | null>(null);
   const [animating, setAnimating] = useState(false);
   const [useTldraw, setUseTldraw] = useState(tldrawEnabled && Boolean(tldrawLicenseKey));
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(() => typeof window === "undefined" ? null : window.sessionStorage.getItem(`coast-draw-revision:${sessionId}`));
+  const [refining, setRefining] = useState(false);
+  const [resetContext, setResetContext] = useState(false);
 
   const applyJob = useCallback((next: { id: string; state: string; previewMediaId?: string | null; outputMediaId?: string | null; errorCode?: string | null }) => {
     setJob((previous) => {
@@ -77,9 +83,16 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
     });
   }, [sessionId]);
 
+  useEffect(() => {
+    if (selectedRevisionId) window.sessionStorage.setItem(`coast-draw-revision:${sessionId}`, selectedRevisionId);
+  }, [selectedRevisionId, sessionId]);
+
   const applyEvent = useCallback((event: EventItem) => {
     if (event.sequence <= lastSequenceRef.current) return;
     lastSequenceRef.current = event.sequence;
+    // A user reviewing an older branch owns their canvas. A background event
+    // may refresh data but cannot pull them into another revision.
+    if (selectedRevisionRef.current && selectedRevisionRef.current !== event.jobId) return;
     applyJob({
       id: event.jobId,
       state: event.state,
@@ -101,6 +114,7 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
 
   const applySnapshot = useCallback((snapshot: JobSnapshot) => {
     if (!snapshot) return;
+    if (selectedRevisionRef.current && selectedRevisionRef.current !== snapshot.jobId) return;
     applyJob({ id: snapshot.jobId, state: snapshot.state, previewMediaId: snapshot.previewMediaId, outputMediaId: snapshot.outputMediaId, errorCode: snapshot.errorCode });
     if (snapshot.outputMediaId) {
       setTab("preview");
@@ -108,13 +122,27 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
     }
   }, [applyJob, setMessage]);
 
+  const refreshRevisions = useCallback(async () => {
+    const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/revisions`, { cache: "no-store" });
+    if (!response.ok) return;
+    const body = await response.json() as { revisions?: Revision[] };
+    const nextRevisions = body.revisions ?? [];
+    setRevisions(nextRevisions);
+    const restored = selectedRevisionRef.current && nextRevisions.find((item) => item.jobId === selectedRevisionRef.current);
+    if (restored) {
+      applyJob({ id: restored.jobId, state: restored.state, previewMediaId: restored.previewMediaId, outputMediaId: restored.outputMediaId });
+      if (restored.outputMediaId) setTab("preview");
+    }
+  }, [applyJob, sessionId]);
+
   const refreshStatus = useCallback(async () => {
     const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/status?after=${lastSequenceRef.current}`, { cache: "no-store" });
     if (!response.ok) return;
     const body = await response.json() as { events?: EventItem[]; currentJob?: JobSnapshot };
     for (const event of body.events ?? []) applyEvent(event);
     applySnapshot(body.currentJob ?? null);
-  }, [applyEvent, applySnapshot, sessionId]);
+    void refreshRevisions();
+  }, [applyEvent, applySnapshot, refreshRevisions, sessionId]);
 
   useEffect(() => {
     const secret = drawLaunchSecret(window.location.hash);
@@ -250,8 +278,12 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
       const context = flattened.getContext("2d"); if (!context) throw new Error("canvas_unavailable");
       context.fillStyle = "#fff"; context.fillRect(0, 0, DRAW_CANVAS_SIZE, DRAW_CANVAS_SIZE);
       if (!useTldraw && backgroundCanvas && strokeCanvas) { context.drawImage(backgroundCanvas, 0, 0); context.drawImage(strokeCanvas, 0, 0); }
+      const parentJobId = backgroundKind === "result" ? selectedRevisionId : null;
+      // A text follow-up can reference its selected private result directly.
+      // Only a new overlay/background needs a browser raster upload.
+      const reuseParentArtifact = Boolean(parentJobId && !ink);
       let mediaId: string | undefined;
-      if (ink || backgroundUrl) {
+      if ((ink || backgroundUrl) && !reuseParentArtifact) {
         const blob = tldrawBlob ?? await new Promise<Blob | null>((resolve) => flattened.toBlob(resolve, "image/jpeg", 0.9));
         if (!blob) throw new Error("canvas_encode_failed");
         const upload = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/media`, { method: "POST", headers: { "content-type": "image/jpeg" }, body: blob });
@@ -262,14 +294,15 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
       const category = ink ? "sketch" : backgroundKind ?? "prompt";
       const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/generations`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ requestKey, prompt: prompt.trim(), ...(mediaId ? { mediaId } : {}), mode, ...(mediaId ? { inputCategory: category } : {}) }),
+        body: JSON.stringify({ requestKey, prompt: prompt.trim(), ...(mediaId ? { mediaId } : {}), ...(parentJobId ? { parentJobId } : {}), ...(resetContext ? { resetContext: true } : {}), mode, ...(mediaId ? { inputCategory: category } : {}) }),
       });
       if (!response.ok) {
         const failure = await response.json().catch(() => ({})) as { error?: string };
-        setMessage(response.status === 401 ? "This session expired. Send /draw for a fresh link." : failure.error?.includes("CREATIVE_JOB_ALREADY_ACTIVE") ? "Another image is still generating." : failure.error?.includes("awaiting_payment") ? "Add credit in iMessage, then try again." : "That generation could not start. Try again.");
+        setMessage(response.status === 401 ? "This session expired. Send /draw for a fresh link." : failure.error?.includes("CREATIVE_JOB_ALREADY_ACTIVE") ? "Another image is still generating." : failure.error?.includes("awaiting_payment") ? "Add credit in iMessage, then try again." : failure.error?.includes("DRAW_CONTEXT_TOO_LONG") ? "This edit history is full. Turn on Start fresh from this image, then Generate." : "That generation could not start. Try again.");
         return;
       }
       const body = await response.json() as { jobId: string; state: string };
+      selectedRevisionRef.current = body.jobId; setSelectedRevisionId(body.jobId); setRefining(false); setResetContext(false);
       applyJob({ id: body.jobId, state: body.state }); setMessage(drawJobLabel(body.state));
     } catch { setMessage("Couldn’t prepare this image. Tap Generate to retry safely."); }
     finally { preparingRef.current = false; setPreparing(false); }
@@ -306,20 +339,28 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   }
   function refine() {
     if (!job?.outputUrl) return;
-    setUseTldraw(false); setBackgroundUrl(job.outputUrl); setBackgroundKind("result"); setStrokes([]); setRedo([]); setCurrent([]); setJob(null); requestKeyRef.current = null; setTab("sketch"); setMessage("Result loaded. Add a prompt or draw a refinement.");
+    setUseTldraw(false); setBackgroundUrl(job.outputUrl); setBackgroundKind("result"); setStrokes([]); setRedo([]); setCurrent([]); requestKeyRef.current = null;
+    selectedRevisionRef.current = job.id; setSelectedRevisionId(job.id); setRefining(true); setResetContext(false); setTab("sketch"); setMessage("Result loaded. Add a follow-up instruction or draw a refinement.");
   }
 
-  const ready = Boolean(job?.outputUrl) && ["ready_for_save", "ready_for_delivery", "delivered"].includes(job?.state ?? "");
+  function selectRevision(revision: Revision) {
+    selectedRevisionRef.current = revision.jobId; setSelectedRevisionId(revision.jobId); setRefining(false); setResetContext(false);
+    applyJob({ id: revision.jobId, state: revision.state, ...(revision.previewMediaId ? { previewMediaId: revision.previewMediaId } : {}), ...(revision.outputMediaId ? { outputMediaId: revision.outputMediaId } : {}) });
+    if (revision.outputMediaId || revision.previewMediaId) setTab("preview");
+  }
+
+  const ready = !refining && Boolean(job?.outputUrl) && ["ready_for_save", "ready_for_delivery", "delivered"].includes(job?.state ?? "");
   const showingGeneratedImage = tab === "preview" && Boolean(job?.previewUrl || job?.outputUrl);
 
   return <main className="draw-shell">
     <header className="draw-header"><div><p className="eyebrow">COAST DRAW</p><h1>Sketch a move</h1></div><span className="status" aria-live="polite">{drawJobLabel(job?.state)}</span></header>
     <nav className="tabs" role="tablist"><ToolcraftButton className={tab === "sketch" ? "active" : ""} onClick={() => setTab("sketch")}>Sketch</ToolcraftButton><ToolcraftButton className={tab === "preview" ? "active" : ""} onClick={() => setTab("preview")} disabled={!job?.previewUrl && !job?.outputUrl}>Preview</ToolcraftButton></nav>
+    {revisions.length > 0 ? <nav className="revision-strip" aria-label="Image revisions">{revisions.map((revision) => <ToolcraftButton key={revision.jobId} className={selectedRevisionId === revision.jobId ? "selected" : ""} onClick={() => selectRevision(revision)}>{revision.outputMediaId || revision.previewMediaId ? <img src={mediaUrl(sessionId, revision.outputMediaId ?? revision.previewMediaId!)} alt="" draggable={false} /> : null}<span>R{revision.revisionNumber}</span><small>{revision.mode === "hq" ? "Sunburst" : revision.mode === "turbo" ? "Turbo" : revision.mode === "detailed" ? "Flare detail" : "Flare fast"}</small><em>{revision.state === "ready_for_save" ? "Ready" : drawJobLabel(revision.state)}</em></ToolcraftButton>)}</nav> : null}
     <div className="toolbar" aria-label="Drawing tools"><div className="palette">{colors.map((value) => <ToolcraftButton key={value} className={`swatch ${color === value && !eraser ? "selected" : ""}`} style={{ background: value }} aria-label={`Use ${value}`} onClick={() => { setColor(value); setEraser(false); tldrawAdapterRef.current?.setBrush(value, size); }} />)}</div><label className="size">Size <input type="range" min="4" max="64" value={size} onChange={(event) => { const next = Number(event.target.value); setSize(next); tldrawAdapterRef.current?.setBrush(color, next); }} /></label><ToolcraftButton className={eraser ? "selected" : ""} onClick={() => setEraser((value) => { const next = !value; tldrawAdapterRef.current?.setEraser(next); return next; })}>Eraser</ToolcraftButton><ToolcraftButton onClick={() => { if (useTldraw) tldrawAdapterRef.current?.undo(); else { const stroke = strokes.at(-1); if (stroke) { setRedo((items) => [...items, stroke]); setStrokes((items) => items.slice(0, -1)); } } }} disabled={!useTldraw && !strokes.length}>Undo</ToolcraftButton><ToolcraftButton onClick={() => { if (useTldraw) tldrawAdapterRef.current?.redo(); else { const stroke = redo.at(-1); if (stroke) { setStrokes((items) => [...items, stroke]); setRedo((items) => items.slice(0, -1)); } } }} disabled={!useTldraw && !redo.length}>Redo</ToolcraftButton><ToolcraftButton onClick={() => { if (useTldraw) tldrawAdapterRef.current?.clear(); else { setStrokes([]); setRedo([]); } }}>Clear</ToolcraftButton><label className="import">Import<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void importImage(event.target.files?.[0])} /></label></div>
     <section className="canvas-zone" ref={drawingSurfaceRef}><div className="viewport">{useTldraw && tldrawLicenseKey ? <TldrawAdapter licenseKey={tldrawLicenseKey} onReady={(adapter) => { tldrawAdapterRef.current = adapter; adapter.setBrush(color, size); }} /> : <><canvas ref={backgroundCanvasRef} className={showingGeneratedImage ? "hidden layer" : "layer"} aria-hidden="true" /><canvas ref={strokeCanvasRef} className={showingGeneratedImage ? "hidden layer" : "layer"} onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} onContextMenu={(event) => event.preventDefault()} aria-label="COAST drawing canvas" /></>}{showingGeneratedImage ? <img className="preview-image" src={job?.outputUrl ?? job?.previewUrl} alt="COAST generated preview" draggable={false} onError={() => setMessage("The image was generated, but its preview could not load. Reopen the card and try again.")} /> : null}<span className="canvas-hint">1024 × 1024</span></div></section>
-    <section className="bottom-sheet"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe the image (optional)" aria-label="Prompt" /><div className="mode-toggle" role="group" aria-label="Generation mode"><button className={mode === "fast" ? "active" : ""} onClick={() => setMode("fast")}>Flare Fast</button><button className={mode === "detailed" ? "active" : ""} onClick={() => setMode("detailed")}>Flare Detailed</button><button className={mode === "turbo" ? "active" : ""} onClick={() => setMode("turbo")}>Turbo · 4 steps</button><button className={mode === "hq" ? "active" : ""} onClick={() => setMode("hq")}>Sunburst HQ</button></div><div className="actions">{ready ? <><button className="discard" onClick={() => void cancel()}>Discard</button><button className="secondary" disabled={animating} onClick={() => void animate()}>{animating ? "Starting…" : "Animate"}</button><button className="save" disabled={saving || job?.state !== "ready_for_save"} onClick={() => void save()}>{saving ? "Saving…" : "Save to iMessage"}</button></> : isDrawJobActive(job?.state) ? <button className="cancel" onClick={() => void cancel()}>Cancel</button> : <button className="generate" disabled={preparing || !authorized} onClick={() => void generate()}>{preparing ? "Preparing…" : "Generate"}</button>}</div><p className="message" aria-live="polite">{message}</p>{ready ? <button className="refine" onClick={refine}>Draw on this result</button> : null}</section>
+    <section className="bottom-sheet"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={refining ? "Follow-up instruction, e.g. Make the sky sunset" : "Describe the image (optional)"} aria-label="Prompt" /><div className="mode-toggle" role="group" aria-label="Generation mode"><button className={mode === "fast" ? "active" : ""} onClick={() => setMode("fast")}>Flare Fast</button><button className={mode === "detailed" ? "active" : ""} onClick={() => setMode("detailed")}>Flare Detailed</button><button className={mode === "turbo" ? "active" : ""} onClick={() => setMode("turbo")}>Turbo · 4 steps</button><button className={mode === "hq" ? "active" : ""} onClick={() => setMode("hq")}>Sunburst HQ</button></div>{refining ? <button className={`context-reset ${resetContext ? "selected" : ""}`} onClick={() => setResetContext((value) => !value)}>{resetContext ? "Starting fresh from this image" : "Start fresh from this image"}</button> : null}<div className="actions">{ready ? <><button className="discard" onClick={() => void cancel()}>Discard</button><button className="secondary" disabled={animating} onClick={() => void animate()}>{animating ? "Starting…" : "Animate"}</button><button className="save" disabled={saving || job?.state !== "ready_for_save"} onClick={() => void save()}>{saving ? "Saving…" : "Save to iMessage"}</button></> : isDrawJobActive(job?.state) ? <button className="cancel" onClick={() => void cancel()}>Cancel</button> : <button className="generate" disabled={preparing || !authorized} onClick={() => void generate()}>{preparing ? "Preparing…" : "Generate"}</button>}</div><p className="message" aria-live="polite">{message}</p>{ready ? <button className="refine" onClick={refine}>Draw on this result</button> : null}</section>
     <style jsx>{`
       :global(html),:global(body){height:100%;margin:0;overscroll-behavior:none;background:#13221b}
-      *{box-sizing:border-box}.draw-shell{height:var(--coast-draw-vvh,100dvh);overflow:hidden;overscroll-behavior:none;background:#13221b;color:#f8f1df;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));font-family:ui-sans-serif,system-ui;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;gap:7px}.draw-header,.tabs,.toolbar,.bottom-sheet{width:min(100%,720px);margin:0 auto}.draw-header{display:flex;justify-content:space-between;align-items:center}.eyebrow{color:#f4b544;letter-spacing:.16em;font-size:10px;font-weight:850;margin:0 0 2px}h1{font-size:22px;line-height:1.05;margin:0}.status{font-size:12px;color:#f4b544;text-align:right}.tabs{display:flex;gap:4px}.tabs button,.mode-toggle button{background:transparent;color:#d8d1be;border:0;padding:9px 13px;min-height:44px;border-radius:12px;font-weight:750}.tabs button.active,.mode-toggle button.active{background:#344a3b;color:#fff}.tabs button:disabled{opacity:.35}.toolbar{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:1px 0}.toolbar button,.import{border:0;background:#344a3b;color:#f8f1df;border-radius:10px;min-height:44px;padding:8px 11px;white-space:nowrap;font-weight:700}.toolbar button:disabled{opacity:.35}.toolbar .selected{outline:2px solid #f4b544}.palette{display:flex;gap:5px}.swatch{width:34px!important;padding:0!important;border:2px solid #f8f1df!important;border-radius:50%!important;flex:0 0 34px}.size{display:flex;align-items:center;gap:4px;color:#f5d998;font-size:12px;white-space:nowrap}.size input{width:72px}.import{position:relative;cursor:pointer}.import input{position:absolute;inset:0;opacity:0;width:100%;height:100%}.canvas-zone{min-height:0;display:grid;place-items:center;overscroll-behavior:contain;touch-action:none}.viewport{position:relative;max-width:100%;max-height:100%;height:min(100%,720px);aspect-ratio:1;background:#fff;border-radius:14px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 8px 30px #0003}.layer,.preview-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;touch-action:none;user-select:none;-webkit-user-drag:none}.tldraw-stage{position:absolute;inset:0}.hidden{visibility:hidden}.preview-image{z-index:3}.canvas-hint{position:absolute;right:9px;bottom:7px;color:#777;background:#fff9;border-radius:7px;padding:3px 6px;font-size:10px;z-index:4}.bottom-sheet{max-height:min(34dvh,250px);overflow:auto;background:#1d3025;border:1px solid #3d5548;border-radius:16px;padding:8px;overscroll-behavior:contain}.bottom-sheet textarea{width:100%;min-height:48px;max-height:96px;resize:vertical;border:1px solid #526357;background:#25352b;color:#fff;border-radius:10px;padding:9px;font:inherit}.mode-toggle{display:flex;background:#13221b;border-radius:12px;overflow-x:auto;margin-top:7px}.mode-toggle button{white-space:nowrap;flex:1;font-size:12px;padding-inline:9px}.actions{display:flex;gap:6px;margin-top:7px}.generate,.cancel,.save,.discard,.secondary{border:0;border-radius:11px;min-height:44px;font-size:14px;font-weight:850}.generate,.save{background:#f4b544;color:#13221b;flex:1}.cancel,.discard{background:#7e4638;color:#fff;padding:0 13px}.secondary{background:#344a3b;color:#f8f1df;padding:0 12px}.save:disabled{opacity:.55}.message{font-size:12px;color:#d8d1be;margin:6px 2px 0;min-height:15px}.refine{width:100%;border:0;background:#f4b544;color:#13221b;border-radius:10px;min-height:40px;font-weight:850;margin-top:6px}@media(max-height:680px){.draw-shell{gap:4px}.toolbar button,.import{min-height:40px}.bottom-sheet{max-height:205px}.bottom-sheet textarea{min-height:40px}.mode-toggle button{min-height:38px}.draw-header h1{font-size:19px}}@media(min-width:760px){.draw-shell{padding:16px}.toolbar{justify-content:center}.bottom-sheet{padding:12px;max-height:270px}}`}</style>
+      *{box-sizing:border-box}.draw-shell{height:var(--coast-draw-vvh,100dvh);overflow:hidden;overscroll-behavior:none;background:#13221b;color:#f8f1df;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));font-family:ui-sans-serif,system-ui;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr) auto;gap:7px}.draw-header,.tabs,.toolbar,.bottom-sheet,.revision-strip{width:min(100%,720px);margin:0 auto}.draw-header{display:flex;justify-content:space-between;align-items:center}.eyebrow{color:#f4b544;letter-spacing:.16em;font-size:10px;font-weight:850;margin:0 0 2px}h1{font-size:22px;line-height:1.05;margin:0}.status{font-size:12px;color:#f4b544;text-align:right}.tabs{display:flex;gap:4px}.tabs button,.mode-toggle button{background:transparent;color:#d8d1be;border:0;padding:9px 13px;min-height:44px;border-radius:12px;font-weight:750}.tabs button.active,.mode-toggle button.active{background:#344a3b;color:#fff}.tabs button:disabled{opacity:.35}.revision-strip{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}.revision-strip button{display:grid;gap:1px;min-width:76px;min-height:48px;padding:6px 9px;text-align:left;color:#f8f1df;border:1px solid #526357;border-radius:10px;background:#1d3025}.revision-strip button.selected{border-color:#f4b544;background:#344a3b}.revision-strip img{width:44px;height:28px;object-fit:cover;border-radius:5px;pointer-events:none}.revision-strip small,.revision-strip em{font-size:9px;font-style:normal;color:#d8d1be;white-space:nowrap}.revision-strip em{color:#f4b544}.toolbar{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:1px 0}.toolbar button,.import{border:0;background:#344a3b;color:#f8f1df;border-radius:10px;min-height:44px;padding:8px 11px;white-space:nowrap;font-weight:700}.toolbar button:disabled{opacity:.35}.toolbar .selected{outline:2px solid #f4b544}.palette{display:flex;gap:5px}.swatch{width:34px!important;padding:0!important;border:2px solid #f8f1df!important;border-radius:50%!important;flex:0 0 34px}.size{display:flex;align-items:center;gap:4px;color:#f5d998;font-size:12px;white-space:nowrap}.size input{width:72px}.import{position:relative;cursor:pointer}.import input{position:absolute;inset:0;opacity:0;width:100%;height:100%}.canvas-zone{min-height:0;display:grid;place-items:center;overscroll-behavior:contain;touch-action:none}.viewport{position:relative;max-width:100%;max-height:100%;height:min(100%,720px);aspect-ratio:1;background:#fff;border-radius:14px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 8px 30px #0003}.layer,.preview-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;touch-action:none;user-select:none;-webkit-user-drag:none}.tldraw-stage{position:absolute;inset:0}.hidden{visibility:hidden}.preview-image{z-index:3}.canvas-hint{position:absolute;right:9px;bottom:7px;color:#777;background:#fff9;border-radius:7px;padding:3px 6px;font-size:10px;z-index:4}.bottom-sheet{max-height:min(34dvh,250px);overflow:auto;background:#1d3025;border:1px solid #3d5548;border-radius:16px;padding:8px;overscroll-behavior:contain}.bottom-sheet textarea{width:100%;min-height:48px;max-height:96px;resize:vertical;border:1px solid #526357;background:#25352b;color:#fff;border-radius:10px;padding:9px;font:inherit}.mode-toggle{display:flex;background:#13221b;border-radius:12px;overflow-x:auto;margin-top:7px}.mode-toggle button{white-space:nowrap;flex:1;font-size:12px;padding-inline:9px}.context-reset{width:100%;border:1px solid #526357;border-radius:9px;background:#13221b;color:#f8f1df;min-height:34px;margin-top:7px;font-weight:700}.context-reset.selected{border-color:#f4b544;color:#f4b544}.actions{display:flex;gap:6px;margin-top:7px}.generate,.cancel,.save,.discard,.secondary{border:0;border-radius:11px;min-height:44px;font-size:14px;font-weight:850}.generate,.save{background:#f4b544;color:#13221b;flex:1}.cancel,.discard{background:#7e4638;color:#fff;padding:0 13px}.secondary{background:#344a3b;color:#f8f1df;padding:0 12px}.save:disabled{opacity:.55}.message{font-size:12px;color:#d8d1be;margin:6px 2px 0;min-height:15px}.refine{width:100%;border:0;background:#f4b544;color:#13221b;border-radius:10px;min-height:40px;font-weight:850;margin-top:6px}@media(max-height:680px){.draw-shell{gap:4px}.toolbar button,.import{min-height:40px}.bottom-sheet{max-height:205px}.bottom-sheet textarea{min-height:40px}.mode-toggle button{min-height:38px}.draw-header h1{font-size:19px}}@media(min-width:760px){.draw-shell{padding:16px}.toolbar{justify-content:center}.bottom-sheet{padding:12px;max-height:270px}}`}</style>
   </main>;
 }

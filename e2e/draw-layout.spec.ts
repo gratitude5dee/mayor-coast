@@ -69,7 +69,7 @@ test("the centered view toggle and icon model picker stay reachable", async ({ p
   await expect(sketch).toBeVisible();
   await expect(preview).toBeVisible();
   await expect(sketch).toHaveAttribute("aria-selected", "true");
-  await expect(sketch).toHaveCSS("color", "rgb(255, 250, 240)");
+  await expect(sketch).toHaveCSS("color", "rgb(248, 251, 255)");
   await expect(preview).toBeDisabled();
   await expect(page.getByRole("radiogroup", { name: "Generation mode" })).toBeVisible();
   await expect(page.getByRole("radio")).toHaveCount(4);

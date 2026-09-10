@@ -45,7 +45,7 @@ it("retains batched pointer moves after React clears the event target", async ()
   expect(() => queue.updates.forEach((update) => update())).not.toThrow();
   expect(queue.values).toContainEqual([{
     points: [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }],
-    color: "#17231d", width: 18, erase: false,
+    color: "#070a12", width: 18, erase: false,
   }]);
   vi.unstubAllGlobals();
 });

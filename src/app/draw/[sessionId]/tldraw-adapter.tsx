@@ -27,8 +27,8 @@ type Props = {
 
 function asAdapter(editor: Editor): RasterEditorAdapter {
   const colorFor = (color: string) => ({
-    "#17231d": "black",
-    "#b45309": "orange",
+    "#070a12": "black",
+    "#286dde": "blue",
     "#dc2626": "red",
     "#2563eb": "blue",
     "#ffffff": "white",

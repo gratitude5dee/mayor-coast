@@ -86,7 +86,9 @@ test("the centered view toggle and icon model picker stay reachable", async ({ p
   expect(canvasBox).not.toBeNull();
   expect(undoBox).not.toBeNull();
   expect(inkBox).not.toBeNull();
-  expect(undoBox!.x + undoBox!.width).toBeLessThanOrEqual(canvasBox!.x);
+  expect(undoBox!.x).toBeGreaterThanOrEqual(canvasBox!.x);
+  expect(undoBox!.y).toBeGreaterThanOrEqual(canvasBox!.y);
+  expect(undoBox!.y + undoBox!.height).toBeLessThanOrEqual(canvasBox!.y + 60);
   expect(inkBox!.y).toBeGreaterThanOrEqual(canvasBox!.y + canvasBox!.height);
   await expect(page.getByRole("button", { name: "Redo" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Clear sketch" })).toBeVisible();

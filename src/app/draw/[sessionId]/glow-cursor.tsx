@@ -14,8 +14,8 @@ type GlowCursorProps = {
   className?: string;
 };
 
-const CANVAS_SIZE = 1024;
-const AMBER = "244, 181, 68";
+const LOGICAL_CANVAS_SIZE = 1024;
+const OUTER_GLOW = "60, 167, 255";
 
 /**
  * React Bits-inspired cursor treatment, intentionally drawn in its own UI
@@ -56,8 +56,8 @@ export default function GlowCursor({ activeRef, trailRef, colorRef, widthRef, pu
     resize();
 
     const drawDot = (point: Pointer, radius: number, color: string, alpha: number, blur: number) => {
-      const x = point.x / CANVAS_SIZE * width;
-      const y = point.y / CANVAS_SIZE * height;
+      const x = Math.max(0, Math.min(width, point.x));
+      const y = Math.max(0, Math.min(height, point.y));
       context.beginPath();
       context.fillStyle = color;
       context.globalAlpha = alpha;
@@ -69,8 +69,8 @@ export default function GlowCursor({ activeRef, trailRef, colorRef, widthRef, pu
 
     const drawSegment = (from: Pointer, to: Pointer, lineWidth: number, color: string, alpha: number, blur: number) => {
       context.beginPath();
-      context.moveTo(from.x / CANVAS_SIZE * width, from.y / CANVAS_SIZE * height);
-      context.lineTo(to.x / CANVAS_SIZE * width, to.y / CANVAS_SIZE * height);
+      context.moveTo(Math.max(0, Math.min(width, from.x)), Math.max(0, Math.min(height, from.y)));
+      context.lineTo(Math.max(0, Math.min(width, to.x)), Math.max(0, Math.min(height, to.y)));
       context.strokeStyle = color;
       context.globalAlpha = alpha;
       context.lineWidth = lineWidth;
@@ -85,7 +85,7 @@ export default function GlowCursor({ activeRef, trailRef, colorRef, widthRef, pu
       context.clearRect(0, 0, width, height);
       const trail = reducedMotionRef.current ? trailRef.current.slice(-1) : trailRef.current;
       if (!trail.length || fade <= 0) return;
-      const scale = Math.min(width, height) / CANVAS_SIZE;
+      const scale = Math.min(width, height) / LOGICAL_CANVAS_SIZE;
       const baseWidth = Math.max(2, widthRef.current * scale);
       const denominator = Math.max(1, trail.length - 1);
       context.save();
@@ -93,11 +93,11 @@ export default function GlowCursor({ activeRef, trailRef, colorRef, widthRef, pu
       for (let index = 1; index < trail.length; index += 1) {
         const progress = index / denominator;
         const alpha = fade * (0.08 + progress * 0.24);
-        drawSegment(trail[index - 1]!, trail[index]!, baseWidth * (2.25 + progress * 0.55), `rgba(${AMBER}, 0.9)`, alpha, baseWidth * (2.8 + progress * 1.5));
+        drawSegment(trail[index - 1]!, trail[index]!, baseWidth * (2.25 + progress * 0.55), `rgba(${OUTER_GLOW}, 0.9)`, alpha, baseWidth * (2.8 + progress * 1.5));
         drawSegment(trail[index - 1]!, trail[index]!, baseWidth * (0.78 + progress * 0.2), colorRef.current, fade * (0.24 + progress * 0.42), baseWidth * 1.1);
       }
       const tip = trail.at(-1)!;
-      drawDot(tip, Math.max(3, baseWidth * 1.35), `rgba(${AMBER}, 0.95)`, fade * 0.46, baseWidth * 4.2);
+      drawDot(tip, Math.max(3, baseWidth * 1.35), `rgba(${OUTER_GLOW}, 0.95)`, fade * 0.46, baseWidth * 4.2);
       drawDot(tip, Math.max(1.5, baseWidth * 0.48), colorRef.current, fade * 0.92, baseWidth * 1.2);
       context.restore();
     };

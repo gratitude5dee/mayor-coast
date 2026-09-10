@@ -7,9 +7,12 @@
   gap: 2px;
   padding: 3px;
   overflow: hidden;
-  border: 1px solid #26334f;
+  border: 1px solid #6da9ee55;
   border-radius: 14px;
-  background: #070a12e8;
+  background: linear-gradient(135deg, #1b3a638f, #070b16cf);
+  box-shadow: inset 0 1px #eff8ff1f, 0 12px 30px #0005;
+  backdrop-filter: blur(20px) saturate(135%);
+  -webkit-backdrop-filter: blur(20px) saturate(135%);
 }
 
 .viewToggleThumb {
@@ -18,8 +21,8 @@
   z-index: 0;
   width: calc(50% - 4px);
   border-radius: 11px;
-  background: #12305f;
-  box-shadow: inset 0 0 0 1px #3ca7ff99, 0 2px 8px #0008;
+  background: linear-gradient(135deg, #317fd6c9, #123d79bd);
+  box-shadow: inset 0 1px #eff8ff4a, 0 7px 17px #073d8c66;
   pointer-events: none;
   transition: transform 220ms ease;
 }
@@ -65,7 +68,10 @@
   padding: 3px;
   overflow: hidden;
   border-radius: 12px;
-  background: #050811;
+  background: linear-gradient(135deg, #0d1830ab, #050812dc);
+  box-shadow: inset 0 1px #e8f5ff12;
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
 }
 
 .modeButton {
@@ -81,12 +87,12 @@
 
 .modeButton:hover {
   color: #f8fbff;
-  background: #0e1c34;
+  background: #17345a88;
 }
 
 .modeButtonActive {
   border-color: #3ca7ffaa;
-  background: #12305f;
+  background: linear-gradient(135deg, #2b75c8d1, #123e7bc7);
   color: #9dd8ff;
   box-shadow: inset 0 0 0 1px #3ca7ff33, 0 2px 9px #0008;
 }

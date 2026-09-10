@@ -157,13 +157,18 @@ test("the cursor glow stays in its UI overlay and fades after brush drawing", as
   await page.mouse.move(box!.x + 48, box!.y + 48);
   await page.mouse.down();
   await page.mouse.move(box!.x + 180, box!.y + 180, { steps: 4 });
-  await expect.poll(() => page.locator(".pencil-glow").evaluate((element) => {
-    const pixels = (element as HTMLCanvasElement).getContext("2d")?.getImageData(0, 0, (element as HTMLCanvasElement).width, (element as HTMLCanvasElement).height).data;
-    return pixels ? Array.from(pixels).some((value, index) => index % 4 === 3 && value > 0) : false;
+  const glow = page.locator(".pencil-glow");
+  await expect.poll(() => glow.evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    const context = canvas.getContext("2d");
+    if (!context) return false;
+    // The overlay is measured in the same CSS-pixel space as the visible canvas.
+    const pixels = context.getImageData(154, 154, 53, 53).data;
+    return Array.from(pixels).some((value, index) => index % 4 === 3 && value > 0);
   })).toBe(true);
   await page.mouse.up();
   await page.waitForTimeout(260);
-  await expect.poll(() => page.locator(".pencil-glow").evaluate((element) => {
+  await expect.poll(() => glow.evaluate((element) => {
     const pixels = (element as HTMLCanvasElement).getContext("2d")?.getImageData(0, 0, (element as HTMLCanvasElement).width, (element as HTMLCanvasElement).height).data;
     return pixels ? Array.from(pixels).some((value, index) => index % 4 === 3 && value > 0) : false;
   })).toBe(false);

@@ -33,6 +33,7 @@ type EventItem = { jobId: string; sequence: number; kind: string; state: string;
 type JobSnapshot = { jobId: string; state: string; previewMediaId: string | null; outputMediaId: string | null; errorCode: string | null } | null;
 type Revision = { jobId: string; parentJobId: string | null; rootJobId: string | null; revisionNumber: number; mode: DrawMode | null; model: string | null; state: string; outputMediaId: string | null; previewMediaId: string | null; createdAtMs: number };
 type DrawView = "sketch" | "preview";
+type GlowPoint = { x: number; y: number };
 
 const colors = ["#070a12", "#286dde", "#ef3340", "#26b4ed", "#ffffff"];
 const mediaUrl = (sessionId: string, mediaId: string) => `/api/draw/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`;
@@ -56,7 +57,7 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   const pointerRef = useRef<number | null>(null);
   const touchDrawingRef = useRef(false);
   const currentRef = useRef<DrawPoint[]>([]);
-  const glowTrailRef = useRef<DrawPoint[]>([]);
+  const glowTrailRef = useRef<GlowPoint[]>([]);
   const glowActiveRef = useRef(false);
   const glowColorRef = useRef(colors[0]!);
   const glowWidthRef = useRef(18);
@@ -81,7 +82,7 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   const [job, setJob] = useState<Job>(null);
   const [tab, setTab] = useState<DrawView>("sketch");
   const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null);
-  const [message, setMessage] = useState("Add a sketch or prompt, then tap Generate.");
+  const [message, setMessage] = useState("Sketch it, describe it, then make it real.");
   const [authorized, setAuthorized] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -317,13 +318,20 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   }, [backgroundUrl]);
 
   function point(event: React.PointerEvent<HTMLCanvasElement>) { const rect = event.currentTarget.getBoundingClientRect(); return canvasPoint(event.clientX, event.clientY, rect); }
+  function glowPoint(event: React.PointerEvent<HTMLCanvasElement>): GlowPoint {
+    const rect = canvasViewportRef.current?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(rect.width, event.clientX - rect.left)),
+      y: Math.max(0, Math.min(rect.height, event.clientY - rect.top)),
+    };
+  }
   function start(event: React.PointerEvent<HTMLCanvasElement>) {
     if (tab !== "sketch") return;
     event.preventDefault(); event.stopPropagation?.(); pointerRef.current = event.pointerId;
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* constrained Photon fallback */ }
-    const nextPoint = point(event);
+    const nextPoint = point(event); const nextGlowPoint = glowPoint(event);
     const next = [nextPoint]; currentRef.current = next; setCurrent(next); setDrawing(true);
-    glowTrailRef.current = eraser ? [] : [nextPoint];
+    glowTrailRef.current = eraser ? [] : [nextGlowPoint];
     glowColorRef.current = color;
     glowWidthRef.current = size;
     glowActiveRef.current = !eraser;
@@ -332,9 +340,9 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   function move(event: React.PointerEvent<HTMLCanvasElement>) {
     if (pointerRef.current !== event.pointerId) return;
     event.preventDefault(); event.stopPropagation?.();
-    const next = currentRef.current.length >= 4096 ? currentRef.current : [...currentRef.current, point(event)];
+    const next = currentRef.current.length >= 4096 ? currentRef.current : [...currentRef.current, point(event)]; const nextGlowPoint = glowPoint(event);
     currentRef.current = next; setCurrent(next);
-    if (glowActiveRef.current) glowTrailRef.current = [...glowTrailRef.current.slice(-15), next.at(-1)!];
+    if (glowActiveRef.current) glowTrailRef.current = [...glowTrailRef.current.slice(-15), nextGlowPoint];
   }
   function end(event?: React.PointerEvent<HTMLCanvasElement>) {
     if (event && pointerRef.current !== event.pointerId) return;
@@ -504,8 +512,8 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
       .silk{position:absolute;inset:0;opacity:.78}
       .draw-top-controls,.canvas-zone,.bottom-sheet{position:relative;z-index:1}
       .draw-shell{background:#05070c;color:#f8fbff}
-      .eyebrow{color:#66b7ff}.bottom-sheet{background:#0b111e;border-color:#26334f}.bottom-sheet textarea{background:#101a2b;border-color:#26334f;color:#f8fbff}
-      .toolbar button,.import,.secondary{background:#13243d;color:#f8fbff}.toolbar .selected{outline-color:#3ca7ff}.size,.message{color:#dbe8ff}.revision-strip button{background:#0b111e;border-color:#26334f;color:#f8fbff}.revision-strip button.selected{background:#12305f;border-color:#3ca7ff}.revision-strip small{color:#dbe8ff}.revision-strip em{color:#9dd8ff}.context-reset{background:#070a12;border-color:#26334f;color:#f8fbff}.context-reset.selected{border-color:#3ca7ff;color:#9dd8ff}.mode-toggle{background:#070a12}.generate,.save,.refine{background:#286dde;color:#f8fbff}.canvas-hint{color:#625d6c}.import:focus-within,.toolbar button:focus-visible{outline-color:#3ca7ff}.size input{accent-color:#3ca7ff}
+      .draw-header{padding:2px 3px}.draw-header h1{letter-spacing:-.035em;text-shadow:0 1px 18px #3ca7ff26}.eyebrow{color:#72bdff;text-shadow:0 0 14px #3ca7ff55}.toolbar{padding:7px 8px;border:1px solid #5c99e433;border-radius:18px;background:linear-gradient(135deg,#17345a7a,#070d1be0);box-shadow:inset 0 1px #d4ecff18,0 10px 28px #0005;backdrop-filter:blur(20px) saturate(135%);-webkit-backdrop-filter:blur(20px) saturate(135%)}
+      .bottom-sheet{background:linear-gradient(135deg,#111d35d9,#080d1ae8);border-color:#75baff44;box-shadow:inset 0 1px #e6f4ff1c,0 18px 42px #0007;backdrop-filter:blur(24px) saturate(135%);-webkit-backdrop-filter:blur(24px) saturate(135%)}.bottom-sheet textarea{background:#12213a9c;border-color:#7dbfff55;color:#f8fbff;box-shadow:inset 0 1px #eff8ff12}.toolbar button,.import,.secondary{background:#183354aa;color:#f8fbff;box-shadow:inset 0 1px #e8f5ff18}.toolbar .selected{outline-color:#4db0ff;box-shadow:inset 0 1px #eff8ff30,0 0 0 1px #3ca7ff55,0 8px 20px #0d62c744}.size,.message{color:#dbe8ff}.revision-strip button{background:#0b111ebd;border-color:#6dadf044;color:#f8fbff;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}.revision-strip button.selected{background:#123d72c7;border-color:#4db0ff}.revision-strip small{color:#dbe8ff}.revision-strip em{color:#9dd8ff}.context-reset{background:#0b1425c9;border-color:#5d9de455;color:#f8fbff}.context-reset.selected{border-color:#4db0ff;color:#9dd8ff}.mode-toggle{background:#070a12}.generate,.save,.refine{background:linear-gradient(135deg,#2f8be8,#1760c8);color:#f8fbff;box-shadow:inset 0 1px #eff9ff4a,0 10px 22px #0a52b64c}.canvas-hint{color:#625d6c}.import:focus-within,.toolbar button:focus-visible{outline-color:#6bc0ff}.size input{accent-color:#3ca7ff}
       .view-toggle{position:relative;display:flex;justify-content:center;gap:2px;padding:3px;background:#122118d9;border:1px solid #526357;border-radius:14px;overflow:hidden}
       .view-toggle-thumb{position:absolute;inset:3px auto 3px 3px;width:calc(50% - 4px);border-radius:11px;background:#344a3b;box-shadow:inset 0 0 0 1px #f4b54466;transition:transform .22s ease;pointer-events:none}
       .view-toggle[data-view="preview"] .view-toggle-thumb{transform:translateX(100%)}
@@ -520,7 +528,7 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
       .preview-image.is-visible{opacity:1}
       .preview-image.is-hidden{opacity:0}
       .preview-preload{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:2;opacity:0;pointer-events:none}
-      .pencil-glow{position:absolute;inset:0;z-index:4;pointer-events:none;overflow:hidden}
+      .pencil-glow{position:absolute;inset:0;z-index:4;width:100%;height:100%;display:block;pointer-events:none;overflow:hidden}
       .canvas-hint{z-index:5}
       .mode-picker{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#13221b;border-radius:12px;overflow:hidden;margin-top:7px;padding:3px}
       .mode-picker button{display:grid;place-items:center;min-height:52px;border:0;border-radius:10px;background:transparent;color:#b8c0b7}

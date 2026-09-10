@@ -1,102 +1,138 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Mesh, Program, Renderer, Triangle } from "ogl";
 
 type Pointer = { x: number; y: number };
 type GlowCursorProps = {
   activeRef: { current: boolean };
-  pointRef: { current: Pointer | null };
+  trailRef: { current: Pointer[] };
+  colorRef: { current: string };
+  widthRef: { current: number };
+  /** Increments once per brush stroke so idle render loops can stay stopped. */
+  pulse: number;
+  reducedMotion: boolean;
   className?: string;
 };
 
-const vertex = `attribute vec2 position; void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
-const fragment = `
-precision highp float;
-uniform vec2 uResolution;
-uniform vec2 uPointer;
-uniform float uActive;
-uniform float uFade;
-void main() {
-  vec2 uv = gl_FragCoord.xy / max(uResolution, vec2(1.0));
-  float distanceToPointer = distance(uv, uPointer);
-  float glow = smoothstep(0.16, 0.0, distanceToPointer) * uActive * uFade;
-  vec3 amber = vec3(1.0, 0.57, 0.08);
-  float core = smoothstep(0.035, 0.0, distanceToPointer) * uActive * uFade;
-  if (glow < 0.002) discard;
-  gl_FragColor = vec4(mix(amber * 0.65, vec3(1.0, 0.88, 0.55), core), glow * 0.22);
-}
-`;
+const CANVAS_SIZE = 1024;
+const AMBER = "244, 181, 68";
 
-/** React Bits-inspired, pointer-fed pencil glow. It never receives drawing input. */
-export default function GlowCursor({ activeRef, pointRef, className = "" }: GlowCursorProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const fadeRef = useRef(0);
+/**
+ * React Bits-inspired cursor treatment, intentionally drawn in its own UI
+ * overlay. The overlay is never composited into COAST's background/stroke
+ * canvases, so it cannot appear in uploads or generated images.
+ */
+export default function GlowCursor({ activeRef, trailRef, colorRef, widthRef, pulse, reducedMotion, className = "" }: GlowCursorProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const runtimeRef = useRef<{ start: () => void } | null>(null);
+  const reducedMotionRef = useRef(reducedMotion);
+
+  useEffect(() => { reducedMotionRef.current = reducedMotion; }, [reducedMotion]);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    let renderer: Renderer | null = null;
-    let frame = 0;
-    let disposed = false;
-    try {
-      renderer = new Renderer({ alpha: true, antialias: false, dpr: 1 });
-      const gl = renderer.gl;
-      gl.clearColor(0, 0, 0, 0);
-      const geometry = new Triangle(gl);
-      const program = new Program(gl, {
-        vertex,
-        fragment,
-        transparent: true,
-        depthTest: false,
-        depthWrite: false,
-        uniforms: { uResolution: { value: [1, 1] }, uPointer: { value: [0.5, 0.5] }, uActive: { value: 0 }, uFade: { value: 0 } },
-      });
-      const mesh = new Mesh(gl, { geometry, program });
-      const canvas = gl.canvas;
-      canvas.setAttribute("aria-hidden", "true");
-      canvas.style.cssText = "display:block;width:100%;height:100%;mix-blend-mode:normal;";
-      container.appendChild(canvas);
-      const resize = () => {
-        const rect = container.getBoundingClientRect();
-        renderer?.setSize(Math.max(1, Math.floor(rect.width)), Math.max(1, Math.floor(rect.height)));
-        program.uniforms.uResolution.value = [gl.drawingBufferWidth, gl.drawingBufferHeight];
-      };
-      const observer = new ResizeObserver(resize);
-      observer.observe(container);
-      const loop = () => {
-        if (disposed) return;
-        const active = activeRef.current && pointRef.current;
-        fadeRef.current += ((active ? 1 : 0) - fadeRef.current) * (active ? 0.34 : 0.25);
-        if (pointRef.current) {
-          const rect = container.getBoundingClientRect();
-          program.uniforms.uPointer.value = [pointRef.current.x / 1024, 1 - pointRef.current.y / 1024];
-          if (rect.width <= 0 || rect.height <= 0) program.uniforms.uFade.value = 0;
-        }
-        program.uniforms.uActive.value = active ? 1 : 0;
-        program.uniforms.uFade.value = fadeRef.current;
-        renderer?.render({ scene: mesh });
-        frame = requestAnimationFrame(loop);
-      };
-      resize();
-      frame = requestAnimationFrame(loop);
-      return () => {
-        disposed = true;
-        cancelAnimationFrame(frame);
-        observer.disconnect();
-        geometry.remove();
-        program.remove();
-        if (canvas.parentNode === container) container.removeChild(canvas);
-        gl.getExtension("WEBGL_lose_context")?.loseContext();
-      };
-    } catch {
-      return () => {
-        disposed = true;
-        cancelAnimationFrame(frame);
-        if (renderer) renderer.gl.getExtension("WEBGL_lose_context")?.loseContext();
-      };
-    }
-  }, [activeRef, pointRef]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) return;
 
-  return <div ref={containerRef} className={`glow-cursor ${className}`.trim()} aria-hidden="true" />;
+    let frame = 0;
+    let running = false;
+    let releasedAt: number | null = null;
+    let disposed = false;
+    let width = 1;
+    let height = 1;
+
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      width = Math.max(1, Math.floor(rect.width));
+      height = Math.max(1, Math.floor(rect.height));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas);
+    resize();
+
+    const drawDot = (point: Pointer, radius: number, color: string, alpha: number, blur: number) => {
+      const x = point.x / CANVAS_SIZE * width;
+      const y = point.y / CANVAS_SIZE * height;
+      context.beginPath();
+      context.fillStyle = color;
+      context.globalAlpha = alpha;
+      context.shadowColor = color;
+      context.shadowBlur = blur;
+      context.arc(x, y, radius, 0, Math.PI * 2);
+      context.fill();
+    };
+
+    const drawSegment = (from: Pointer, to: Pointer, lineWidth: number, color: string, alpha: number, blur: number) => {
+      context.beginPath();
+      context.moveTo(from.x / CANVAS_SIZE * width, from.y / CANVAS_SIZE * height);
+      context.lineTo(to.x / CANVAS_SIZE * width, to.y / CANVAS_SIZE * height);
+      context.strokeStyle = color;
+      context.globalAlpha = alpha;
+      context.lineWidth = lineWidth;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.shadowColor = color;
+      context.shadowBlur = blur;
+      context.stroke();
+    };
+
+    const render = (fade: number) => {
+      context.clearRect(0, 0, width, height);
+      const trail = reducedMotionRef.current ? trailRef.current.slice(-1) : trailRef.current;
+      if (!trail.length || fade <= 0) return;
+      const scale = Math.min(width, height) / CANVAS_SIZE;
+      const baseWidth = Math.max(2, widthRef.current * scale);
+      const denominator = Math.max(1, trail.length - 1);
+      context.save();
+      context.globalCompositeOperation = "source-over";
+      for (let index = 1; index < trail.length; index += 1) {
+        const progress = index / denominator;
+        const alpha = fade * (0.08 + progress * 0.24);
+        drawSegment(trail[index - 1]!, trail[index]!, baseWidth * (2.25 + progress * 0.55), `rgba(${AMBER}, 0.9)`, alpha, baseWidth * (2.8 + progress * 1.5));
+        drawSegment(trail[index - 1]!, trail[index]!, baseWidth * (0.78 + progress * 0.2), colorRef.current, fade * (0.24 + progress * 0.42), baseWidth * 1.1);
+      }
+      const tip = trail.at(-1)!;
+      drawDot(tip, Math.max(3, baseWidth * 1.35), `rgba(${AMBER}, 0.95)`, fade * 0.46, baseWidth * 4.2);
+      drawDot(tip, Math.max(1.5, baseWidth * 0.48), colorRef.current, fade * 0.92, baseWidth * 1.2);
+      context.restore();
+    };
+
+    const loop = (now: number) => {
+      if (disposed) return;
+      if (activeRef.current) releasedAt = null;
+      if (!activeRef.current && releasedAt === null) releasedAt = now;
+      const fade = activeRef.current ? 1 : reducedMotionRef.current ? 0 : Math.max(0, 1 - (now - (releasedAt ?? now)) / 200);
+      render(fade);
+      if (activeRef.current || fade > 0) {
+        frame = requestAnimationFrame(loop);
+      } else {
+        running = false;
+        context.clearRect(0, 0, width, height);
+      }
+    };
+
+    runtimeRef.current = {
+      start() {
+        if (running || disposed || !activeRef.current) return;
+        releasedAt = null;
+        running = true;
+        frame = requestAnimationFrame(loop);
+      },
+    };
+    return () => {
+      disposed = true;
+      runtimeRef.current = null;
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [activeRef, colorRef, trailRef, widthRef]);
+
+  useEffect(() => { runtimeRef.current?.start(); }, [pulse]);
+
+  return <canvas ref={canvasRef} className={`glow-cursor ${className}`.trim()} aria-hidden="true" />;
 }

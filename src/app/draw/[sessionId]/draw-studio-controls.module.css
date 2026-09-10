@@ -1,0 +1,123 @@
+.viewToggle {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 310px);
+  margin: 0 auto;
+  gap: 2px;
+  padding: 3px;
+  overflow: hidden;
+  border: 1px solid #526357;
+  border-radius: 14px;
+  background: #122118d9;
+}
+
+.viewToggleThumb {
+  position: absolute;
+  inset: 3px auto 3px 3px;
+  z-index: 0;
+  width: calc(50% - 4px);
+  border-radius: 11px;
+  background: #344a3b;
+  box-shadow: inset 0 0 0 1px #f4b54499, 0 2px 8px #0003;
+  pointer-events: none;
+  transition: transform 220ms ease;
+}
+
+.viewToggle[data-view="preview"] .viewToggleThumb {
+  transform: translateX(100%);
+}
+
+.viewToggleButton {
+  position: relative;
+  z-index: 1;
+  min-height: 44px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: #d8d1be;
+  font: inherit;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.viewToggleButtonActive {
+  color: #fffaf0;
+}
+
+.viewToggleButton:disabled {
+  color: #8a948d;
+  cursor: not-allowed;
+}
+
+.viewToggleButton:focus-visible,
+.modeButton:focus-visible {
+  outline: 2px solid #f4b544;
+  outline-offset: 2px;
+}
+
+.modePicker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 7px;
+  padding: 3px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #13221b;
+}
+
+.modeButton {
+  display: grid;
+  min-height: 52px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #c8d0c6;
+  cursor: pointer;
+}
+
+.modeButton:hover {
+  color: #f8f1df;
+  background: #283b2f;
+}
+
+.modeButtonActive {
+  border-color: #f4b544aa;
+  background: #344a3b;
+  color: #f4b544;
+  box-shadow: inset 0 0 0 1px #f4b54433, 0 2px 9px #0004;
+}
+
+.modeIcon {
+  display: block;
+  width: 25px;
+  height: 25px;
+}
+
+.modelCaption {
+  height: 18px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: #f5d998;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 18px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewToggleThumb {
+    transition: none;
+  }
+}
+
+@media (max-height: 680px) {
+  .modeButton {
+    min-height: 46px;
+  }
+}

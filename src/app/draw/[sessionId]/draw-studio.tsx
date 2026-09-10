@@ -18,6 +18,7 @@ import {
 } from "@/lib/draw/canvas";
 import { drawLaunchSecret } from "@/lib/draw/launch";
 import type { DrawMode } from "@/lib/draw/provider";
+import controls from "./draw-studio-controls.module.css";
 import { ToolcraftButton } from "./toolcraft-controls";
 import type { RasterEditorAdapter } from "./tldraw-adapter";
 
@@ -36,12 +37,15 @@ type DrawView = "sketch" | "preview";
 const colors = ["#17231d", "#b45309", "#dc2626", "#2563eb", "#ffffff"];
 const mediaUrl = (sessionId: string, mediaId: string) => `/api/draw/sessions/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(mediaId)}`;
 const modeLabels: Record<DrawMode, string> = { fast: "Flare Fast", detailed: "Flare Detailed", turbo: "Turbo · 4 steps", hq: "Sunburst HQ" };
+const drawModes: DrawMode[] = ["fast", "detailed", "turbo", "hq"];
+const classNames = (...items: Array<string | false | null | undefined>) => items.filter(Boolean).join(" ");
 
-function ModeIcon({ mode }: { mode: DrawMode }) {
-  if (mode === "fast") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13 2-8 12h6l-1 8 8-12h-6l1-8Z" /></svg>;
-  if (mode === "detailed") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16M8 4v4M15 10v4M11 16v4" /></svg>;
-  if (mode === "turbo") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13 2-2 7H5l5 4-2 9 8-10h-5l2-10ZM18 3v4M20 5h-4" /></svg>;
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 2.1 6.3L20 11l-5.9 2.7L12 20l-2.1-6.3L4 11l5.9-2.7L12 2ZM19 17v5M21.5 19.5h-5" /></svg>;
+function ModeIcon({ mode, className }: { mode: DrawMode; className?: string | undefined }) {
+  const props = { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.85, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (mode === "fast") return <svg {...props}><path d="m13.2 2.5-8.1 11.1h6.1l-1 7.9 8.6-11.5h-6.3l.7-7.5Z" /></svg>;
+  if (mode === "detailed") return <svg {...props}><path d="M4 6h16M4 12h16M4 18h16" /><path d="M8 4v4M16 10v4M11 16v4" /><circle cx="8" cy="6" r="1.35" /><circle cx="16" cy="12" r="1.35" /><circle cx="11" cy="18" r="1.35" /></svg>;
+  if (mode === "turbo") return <svg {...props}><path d="M14.5 3.2c3.3.1 5.4 1.6 6.1 2.4-.9 4.3-3.2 7.5-7 9.6l-4.8-4.8c2.1-3.8 5.3-6.1 5.7-7.2Z" /><path d="m9 10.2-3.8.8-1.5 3.2 3.4.4M13.8 15.2l-.8 3.8-3.2 1.5-.4-3.4M16.3 7.7h.01" /><path d="m8.2 16.8-2 3.1M6.4 15l-2.7.5" /></svg>;
+  return <svg {...props}><circle cx="12" cy="12" r="3.35" /><path d="M12 2.5v2.1M12 19.4v2.1M21.5 12h-2.1M4.6 12H2.5M18.7 5.3l-1.5 1.5M6.8 17.2l-1.5 1.5M18.7 18.7l-1.5-1.5M6.8 6.8 5.3 5.3" /></svg>;
 }
 
 export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLicenseKey }: Props) {
@@ -52,9 +56,14 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   const pointerRef = useRef<number | null>(null);
   const touchDrawingRef = useRef(false);
   const currentRef = useRef<DrawPoint[]>([]);
-  const glowPointRef = useRef<DrawPoint | null>(null);
+  const glowTrailRef = useRef<DrawPoint[]>([]);
   const glowActiveRef = useRef(false);
-  const viewTouchedRef = useRef(false);
+  const glowColorRef = useRef(colors[0]!);
+  const glowWidthRef = useRef(18);
+  const activeJobIdRef = useRef<string | null>(null);
+  const autoPreviewEligibleJobIdRef = useRef<string | null>(null);
+  const autoPreviewedJobIdRef = useRef<string | null>(null);
+  const explicitViewJobIdRef = useRef<string | null>(null);
   const lastSequenceRef = useRef(0);
   const requestKeyRef = useRef<string | null>(null);
   const selectedRevisionRef = useRef<string | null>(typeof window === "undefined" ? null : window.sessionStorage.getItem(`coast-draw-revision:${sessionId}`));
@@ -87,15 +96,22 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
   const [promptFocused, setPromptFocused] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [decodedPreview, setDecodedPreview] = useState<{ key: string; url: string } | null>(null);
+  const [glowPulse, setGlowPulse] = useState(0);
 
   const selectView = useCallback((next: DrawView, explicit = true) => {
-    if (explicit) viewTouchedRef.current = true;
+    if (explicit) explicitViewJobIdRef.current = activeJobIdRef.current;
     setTab(next);
   }, []);
 
   const applyJob = useCallback((next: { id: string; state: string; previewMediaId?: string | null; outputMediaId?: string | null; errorCode?: string | null }) => {
+    const isNew = activeJobIdRef.current !== next.id;
+    if (isNew) {
+      activeJobIdRef.current = next.id;
+      explicitViewJobIdRef.current = null;
+      setDecodedPreview(null);
+      setTab("sketch");
+    }
     setJob((previous) => {
-      const isNew = previous?.id !== next.id;
       return {
         id: next.id,
         state: next.state,
@@ -106,7 +122,7 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
         ...(next.errorCode ? { errorCode: next.errorCode } : {}),
       };
     });
-  }, [sessionId]);
+  }, [sessionId, setDecodedPreview]);
 
   useEffect(() => {
     if (selectedRevisionId) window.sessionStorage.setItem(`coast-draw-revision:${sessionId}`, selectedRevisionId);
@@ -125,9 +141,7 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
       ...(event.kind === "completed" && event.mediaId ? { outputMediaId: event.mediaId } : {}),
       errorCode: event.errorCode,
     });
-    if (event.kind === "preview" && event.mediaId && !viewTouchedRef.current) selectView("preview", false);
     if (event.kind === "completed" && event.mediaId) {
-      if (!viewTouchedRef.current) selectView("preview", false);
       setMessage("Image ready. Review it, animate it, or tap Save to send it in iMessage.");
     } else if (event.errorCode) {
       setMessage("This request needs attention. You can start a new image when it clears.");
@@ -135,17 +149,16 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
       setMessage(drawJobLabel(event.state));
     }
     if (["delivered", "failed", "terminal_failure", "refused", "cancelled", "expired"].includes(event.state)) requestKeyRef.current = null;
-  }, [applyJob, selectView, setMessage]);
+  }, [applyJob, setMessage]);
 
   const applySnapshot = useCallback((snapshot: JobSnapshot) => {
     if (!snapshot) return;
     if (selectedRevisionRef.current && selectedRevisionRef.current !== snapshot.jobId) return;
     applyJob({ id: snapshot.jobId, state: snapshot.state, previewMediaId: snapshot.previewMediaId, outputMediaId: snapshot.outputMediaId, errorCode: snapshot.errorCode });
-    if (snapshot.outputMediaId && !viewTouchedRef.current) {
-      selectView("preview", false);
+    if (snapshot.outputMediaId) {
       setMessage(snapshot.state === "ready_for_save" ? "Image ready. Review it, animate it, or tap Save to send it in iMessage." : drawJobLabel(snapshot.state));
     }
-  }, [applyJob, selectView, setMessage]);
+  }, [applyJob, setMessage]);
 
   const refreshRevisions = useCallback(async () => {
     const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/revisions`, { cache: "no-store" });
@@ -156,9 +169,8 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
     const restored = selectedRevisionRef.current && nextRevisions.find((item) => item.jobId === selectedRevisionRef.current);
     if (restored) {
       applyJob({ id: restored.jobId, state: restored.state, previewMediaId: restored.previewMediaId, outputMediaId: restored.outputMediaId });
-      if (restored.outputMediaId && !viewTouchedRef.current) selectView("preview", false);
     }
-  }, [applyJob, selectView, sessionId]);
+  }, [applyJob, sessionId]);
 
   const refreshStatus = useCallback(async () => {
     const response = await fetch(`/api/draw/sessions/${encodeURIComponent(sessionId)}/status?after=${lastSequenceRef.current}`, { cache: "no-store" });
@@ -230,6 +242,23 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
     return () => { window.visualViewport?.removeEventListener("resize", update); window.removeEventListener("resize", update); };
   }, []);
 
+  const setDrawingSurface = useCallback((node: HTMLElement | null) => {
+    drawingSurfaceRef.current = node;
+    if (!node) return;
+    let frame = 0;
+    const sizeCanvas = () => {
+      const viewport = canvasViewportRef.current;
+      if (!viewport) return;
+      const bounds = node.getBoundingClientRect();
+      const edge = Math.floor(Math.min(bounds.width, bounds.height, 720));
+      if (edge > 0) viewport.style.setProperty("--coast-draw-canvas-edge", `${edge}px`);
+    };
+    const observer = new ResizeObserver(sizeCanvas);
+    observer.observe(node);
+    frame = requestAnimationFrame(sizeCanvas);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
+  }, []);
+
   useEffect(() => {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(query.matches);
@@ -294,20 +323,25 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* constrained Photon fallback */ }
     const nextPoint = point(event);
     const next = [nextPoint]; currentRef.current = next; setCurrent(next); setDrawing(true);
-    glowPointRef.current = nextPoint; glowActiveRef.current = !eraser;
+    glowTrailRef.current = eraser ? [] : [nextPoint];
+    glowColorRef.current = color;
+    glowWidthRef.current = size;
+    glowActiveRef.current = !eraser;
+    if (!eraser) setGlowPulse((value) => value + 1);
   }
   function move(event: React.PointerEvent<HTMLCanvasElement>) {
     if (pointerRef.current !== event.pointerId) return;
     event.preventDefault(); event.stopPropagation?.();
     const next = currentRef.current.length >= 4096 ? currentRef.current : [...currentRef.current, point(event)];
-    currentRef.current = next; setCurrent(next); glowPointRef.current = next.at(-1) ?? null;
+    currentRef.current = next; setCurrent(next);
+    if (glowActiveRef.current) glowTrailRef.current = [...glowTrailRef.current.slice(-15), next.at(-1)!];
   }
   function end(event?: React.PointerEvent<HTMLCanvasElement>) {
     if (event && pointerRef.current !== event.pointerId) return;
     pointerRef.current = null;
     const stroke = completedStroke(currentRef.current, color, size, eraser);
     if (stroke) setStrokes((value) => [...value, stroke]);
-    setRedo([]); currentRef.current = []; setCurrent([]); setDrawing(false); glowActiveRef.current = false; glowPointRef.current = null;
+    setRedo([]); currentRef.current = []; setCurrent([]); setDrawing(false); glowActiveRef.current = false;
   }
 
   async function importImage(file: File | undefined) {
@@ -358,7 +392,12 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
         return;
       }
       const body = await response.json() as { jobId: string; state: string };
-      viewTouchedRef.current = false;
+      activeJobIdRef.current = null;
+      explicitViewJobIdRef.current = null;
+      autoPreviewEligibleJobIdRef.current = body.jobId;
+      autoPreviewedJobIdRef.current = null;
+      setDecodedPreview(null);
+      setTab("sketch");
       selectedRevisionRef.current = body.jobId; setSelectedRevisionId(body.jobId); setRefining(false); setResetContext(false);
       applyJob({ id: body.jobId, state: body.state }); setMessage(drawJobLabel(body.state));
     } catch { setMessage("Couldn’t prepare this image. Tap Generate to retry safely."); }
@@ -416,23 +455,50 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
     image.onerror = () => setMessage("The image is ready, but its preview could not load. Reopen the card and try again.");
     image.src = currentPreviewUrl;
   }, [currentPreviewKey, currentPreviewUrl, decodedPreview?.key]);
+  useEffect(() => {
+    if (!decodedPreview || !job?.id || decodedPreview.key !== currentPreviewKey) return;
+    if (autoPreviewEligibleJobIdRef.current !== job.id || autoPreviewedJobIdRef.current === job.id) return;
+    autoPreviewedJobIdRef.current = job.id;
+    if (explicitViewJobIdRef.current !== job.id) setTab("preview");
+  }, [currentPreviewKey, decodedPreview, job?.id]);
   const showingGeneratedImage = tab === "preview" && Boolean(decodedPreview);
   const sketchEditable = tab === "sketch" && !preparing && !isDrawJobActive(job?.state);
+  function viewKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" || event.key === "ArrowLeft" ? "sketch" : "preview";
+    if (next === "preview" && !decodedPreview) return;
+    selectView(next);
+    (event.currentTarget.parentElement?.querySelector(`[data-draw-view="${next}"]`) as HTMLButtonElement | null)?.focus();
+  }
+  function modeKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, currentMode: DrawMode) {
+    const horizontal = event.key === "ArrowRight" || event.key === "ArrowLeft";
+    if (!horizontal && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const index = drawModes.indexOf(currentMode);
+    const next = event.key === "Home" ? drawModes[0]! : event.key === "End" ? drawModes.at(-1)! : drawModes[(index + (event.key === "ArrowRight" ? 1 : -1) + drawModes.length) % drawModes.length]!;
+    setMode(next);
+    (event.currentTarget.parentElement?.querySelector(`[data-mode="${next}"]`) as HTMLButtonElement | null)?.focus();
+  }
 
   return <main className="draw-shell">
     <div className="effects-backdrop"><GhostFibers paused={drawing || promptFocused || preparing || isDrawJobActive(job?.state)} reducedMotion={reducedMotion} /></div>
     <div className="draw-top-controls">
       <header className="draw-header"><div><p className="eyebrow">COAST DRAW</p><h1>Sketch a move</h1></div></header>
-      <nav className="view-toggle" data-view={tab} role="tablist" aria-label="Canvas view"><span className="view-toggle-thumb" aria-hidden="true" /><ToolcraftButton className={tab === "sketch" ? "active" : ""} role="tab" aria-selected={tab === "sketch"} onClick={() => selectView("sketch")}>Sketch</ToolcraftButton><ToolcraftButton className={tab === "preview" ? "active" : ""} role="tab" aria-selected={tab === "preview"} onClick={() => selectView("preview")} disabled={!decodedPreview}>Preview</ToolcraftButton></nav>
+      <nav className={controls.viewToggle} data-view={tab} role="tablist" aria-label="Canvas view">
+        <span className={controls.viewToggleThumb} aria-hidden="true" />
+        <ToolcraftButton className={classNames(controls.viewToggleButton, tab === "sketch" && controls.viewToggleButtonActive)} data-draw-view="sketch" role="tab" aria-selected={tab === "sketch"} aria-controls="draw-canvas-panel" tabIndex={tab === "sketch" ? 0 : -1} onClick={() => selectView("sketch")} onKeyDown={viewKeyDown}>Sketch</ToolcraftButton>
+        <ToolcraftButton className={classNames(controls.viewToggleButton, tab === "preview" && controls.viewToggleButtonActive)} data-draw-view="preview" role="tab" aria-selected={tab === "preview"} aria-controls="draw-canvas-panel" tabIndex={tab === "preview" ? 0 : -1} onClick={() => selectView("preview")} onKeyDown={viewKeyDown} disabled={!decodedPreview}>Preview</ToolcraftButton>
+      </nav>
       {revisions.length > 0 ? <nav className="revision-strip" aria-label="Image revisions">{revisions.map((revision) => <ToolcraftButton key={revision.jobId} className={selectedRevisionId === revision.jobId ? "selected" : ""} onClick={() => selectRevision(revision)}>{revision.outputMediaId || revision.previewMediaId ? <img src={mediaUrl(sessionId, revision.outputMediaId ?? revision.previewMediaId!)} alt="" draggable={false} /> : null}<span>R{revision.revisionNumber}</span><small>{revision.mode ? modeLabels[revision.mode] : "Image"}</small><em>{revision.state === "ready_for_save" ? "Ready" : drawJobLabel(revision.state)}</em></ToolcraftButton>)}</nav> : null}
       <div className="toolbar" aria-label="Drawing tools"><div className="palette">{colors.map((value) => <ToolcraftButton key={value} className={`swatch ${color === value && !eraser ? "selected" : ""}`} style={{ background: value }} aria-label={`Use ${value}`} disabled={!sketchEditable} onClick={() => { setColor(value); setEraser(false); tldrawAdapterRef.current?.setBrush(value, size); }} />)}</div><label className="size">Size <input type="range" min="4" max="64" value={size} disabled={!sketchEditable} aria-label="Brush size" onChange={(event) => { const next = Number(event.target.value); setSize(next); tldrawAdapterRef.current?.setBrush(color, next); }} /></label><ToolcraftButton className={eraser ? "selected" : ""} disabled={!sketchEditable} onClick={() => setEraser((value) => { const next = !value; tldrawAdapterRef.current?.setEraser(next); return next; })}>Eraser</ToolcraftButton><ToolcraftButton disabled={!sketchEditable || (!useTldraw && !strokes.length)} onClick={() => { if (useTldraw) tldrawAdapterRef.current?.undo(); else { const stroke = strokes.at(-1); if (stroke) { setRedo((items) => [...items, stroke]); setStrokes((items) => items.slice(0, -1)); } } }}>Undo</ToolcraftButton><ToolcraftButton disabled={!sketchEditable || (!useTldraw && !redo.length)} onClick={() => { if (useTldraw) tldrawAdapterRef.current?.redo(); else { const stroke = redo.at(-1); if (stroke) { setStrokes((items) => [...items, stroke]); setRedo((items) => items.slice(0, -1)); } } }}>Redo</ToolcraftButton><ToolcraftButton disabled={!sketchEditable} onClick={() => { if (useTldraw) tldrawAdapterRef.current?.clear(); else { setStrokes([]); setRedo([]); } }}>Clear</ToolcraftButton><label className={`import ${!sketchEditable ? "disabled" : ""}`}>Import<input type="file" accept="image/jpeg,image/png,image/webp" disabled={!sketchEditable} onChange={(event) => void importImage(event.target.files?.[0])} /></label></div>
     </div>
-    <section className="canvas-zone" ref={drawingSurfaceRef}><div ref={canvasViewportRef} className="viewport" data-testid="draw-canvas-viewport"><div className={`sketch-layers ${showingGeneratedImage ? "is-faded" : ""}`} aria-hidden="true">{useTldraw && tldrawLicenseKey ? <TldrawAdapter licenseKey={tldrawLicenseKey} onReady={(adapter) => { tldrawAdapterRef.current = adapter; adapter.setBrush(color, size); }} /> : <><canvas ref={backgroundCanvasRef} className="layer" /><canvas ref={strokeCanvasRef} className="layer" onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} onContextMenu={(event) => event.preventDefault()} aria-label="COAST drawing canvas" data-testid="draw-canvas" /></>}</div>{currentPreviewUrl ? <img className={`preview-image ${showingGeneratedImage ? "is-visible" : "is-hidden"}`} src={decodedPreview?.url ?? currentPreviewUrl} alt="COAST generated preview" draggable={false} /> : null}{currentPreviewUrl && decodedPreview?.url !== currentPreviewUrl ? <img className="preview-preload" src={currentPreviewUrl} alt="" aria-hidden="true" draggable={false} onLoad={() => setDecodedPreview({ key: currentPreviewKey ?? "", url: currentPreviewUrl })} onError={() => setMessage("The image is ready, but its preview could not load. Reopen the card and try again.")} /> : null}<GlowCursor activeRef={glowActiveRef} pointRef={glowPointRef} className="pencil-glow" /><span className="canvas-hint">1024 × 1024</span></div></section>
-    <section className="bottom-sheet"><textarea value={prompt} onFocus={() => setPromptFocused(true)} onBlur={() => setPromptFocused(false)} onChange={(event) => setPrompt(event.target.value)} placeholder={refining ? "Follow-up instruction, e.g. Make the sky sunset" : "Describe the image (optional)"} aria-label="Prompt" /><div className="mode-picker" role="radiogroup" aria-label="Generation mode">{(["fast", "detailed", "turbo", "hq"] as DrawMode[]).map((item) => <ToolcraftButton key={item} data-mode={item} className={mode === item ? "active" : ""} role="radio" aria-checked={mode === item} aria-label={modeLabels[item]} onClick={() => setMode(item)} onKeyDown={(event) => { if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return; event.preventDefault(); const modes: DrawMode[] = ["fast", "detailed", "turbo", "hq"]; const index = modes.indexOf(item); const next = modes[(index + (event.key === "ArrowRight" ? 1 : -1) + modes.length) % modes.length]!; setMode(next); (event.currentTarget.parentElement?.querySelector(`[data-mode="${next}"]`) as HTMLButtonElement | null)?.focus(); }}><ModeIcon mode={item} /></ToolcraftButton>)}</div><div className="model-caption" aria-live="polite">{modeLabels[mode]}</div>{refining ? <button className={`context-reset ${resetContext ? "selected" : ""}`} onClick={() => setResetContext((value) => !value)}>{resetContext ? "Starting fresh from this image" : "Start fresh from this image"}</button> : null}<div className="actions">{ready ? <><button className="discard" onClick={() => void cancel()}>Discard</button><button className="secondary" disabled={animating} onClick={() => void animate()}>{animating ? "Starting…" : "Animate"}</button><button className="save" disabled={saving || job?.state !== "ready_for_save"} onClick={() => void save()}>{saving ? "Saving…" : "Save to iMessage"}</button></> : isDrawJobActive(job?.state) ? <button className="cancel" onClick={() => void cancel()}>Cancel</button> : <button className="generate" disabled={preparing || !authorized || tab === "preview"} onClick={() => void generate()}>{preparing ? "Preparing…" : "Generate"}</button>}</div><p className="message" aria-live="polite">{message}</p>{ready ? <button className="refine" onClick={refine}>Draw on this result</button> : null}</section>
-    <style jsx>{`
-      :global(html),:global(body){height:100%;margin:0;overscroll-behavior:none;background:#13221b}
-      *{box-sizing:border-box}.draw-shell{height:var(--coast-draw-vvh,100dvh);overflow:hidden;overscroll-behavior:none;background:#13221b;color:#f8f1df;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));font-family:ui-sans-serif,system-ui;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:7px}.draw-top-controls{display:grid;gap:7px;min-width:0}.draw-header,.tabs,.toolbar,.bottom-sheet,.revision-strip{width:min(100%,720px);margin:0 auto}.draw-header{display:flex;justify-content:space-between;align-items:center}.eyebrow{color:#f4b544;letter-spacing:.16em;font-size:10px;font-weight:850;margin:0 0 2px}h1{font-size:22px;line-height:1.05;margin:0}.status{font-size:12px;color:#f4b544;text-align:right}.tabs{display:flex;gap:4px}.tabs button,.mode-toggle button{background:transparent;color:#d8d1be;border:0;padding:9px 13px;min-height:44px;border-radius:12px;font-weight:750}.tabs button.active,.mode-toggle button.active{background:#344a3b;color:#fff}.tabs button:disabled{opacity:.35}.revision-strip{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}.revision-strip button{display:grid;gap:1px;min-width:76px;min-height:48px;padding:6px 9px;text-align:left;color:#f8f1df;border:1px solid #526357;border-radius:10px;background:#1d3025}.revision-strip button.selected{border-color:#f4b544;background:#344a3b}.revision-strip img{width:44px;height:28px;object-fit:cover;border-radius:5px;pointer-events:none}.revision-strip small,.revision-strip em{font-size:9px;font-style:normal;color:#d8d1be;white-space:nowrap}.revision-strip em{color:#f4b544}.toolbar{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:1px 0}.toolbar button,.import{border:0;background:#344a3b;color:#f8f1df;border-radius:10px;min-height:44px;padding:8px 11px;white-space:nowrap;font-weight:700}.toolbar button:disabled{opacity:.35}.toolbar .selected{outline:2px solid #f4b544}.palette{display:flex;gap:5px}.swatch{width:34px!important;padding:0!important;border:2px solid #f8f1df!important;border-radius:50%!important;flex:0 0 34px}.size{display:flex;align-items:center;gap:4px;color:#f5d998;font-size:12px;white-space:nowrap}.size input{width:72px}.import{position:relative;cursor:pointer}.import input{position:absolute;inset:0;opacity:0;width:100%;height:100%}.canvas-zone{min-height:0;display:grid;place-items:center;overscroll-behavior:contain;touch-action:none}.viewport{position:relative;max-width:100%;max-height:100%;height:min(100%,720px);aspect-ratio:1;background:#fff;border-radius:14px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 8px 30px #0003}.layer,.preview-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;touch-action:none;user-select:none;-webkit-user-drag:none}.tldraw-stage{position:absolute;inset:0}.hidden{visibility:hidden}.preview-image{z-index:3}.canvas-hint{position:absolute;right:9px;bottom:7px;color:#777;background:#fff9;border-radius:7px;padding:3px 6px;font-size:10px;z-index:4}.bottom-sheet{max-height:min(34dvh,250px);overflow:auto;background:#1d3025;border:1px solid #3d5548;border-radius:16px;padding:8px;overscroll-behavior:contain}.bottom-sheet textarea{width:100%;min-height:48px;max-height:96px;resize:vertical;border:1px solid #526357;background:#25352b;color:#fff;border-radius:10px;padding:9px;font:inherit}.mode-toggle{display:flex;background:#13221b;border-radius:12px;overflow-x:auto;margin-top:7px}.mode-toggle button{white-space:nowrap;flex:1;font-size:12px;padding-inline:9px}.context-reset{width:100%;border:1px solid #526357;border-radius:9px;background:#13221b;color:#f8f1df;min-height:34px;margin-top:7px;font-weight:700}.context-reset.selected{border-color:#f4b544;color:#f4b544}.actions{display:flex;gap:6px;margin-top:7px}.generate,.cancel,.save,.discard,.secondary{border:0;border-radius:11px;min-height:44px;font-size:14px;font-weight:850}.generate,.save{background:#f4b544;color:#13221b;flex:1}.cancel,.discard{background:#7e4638;color:#fff;padding:0 13px}.secondary{background:#344a3b;color:#f8f1df;padding:0 12px}.save:disabled{opacity:.55}.message{font-size:12px;color:#d8d1be;margin:6px 2px 0;min-height:15px}.refine{width:100%;border:0;background:#f4b544;color:#13221b;border-radius:10px;min-height:40px;font-weight:850;margin-top:6px}@media(max-height:680px){.draw-shell{gap:4px}.draw-top-controls{gap:4px}.toolbar button,.import{min-height:40px}.bottom-sheet{max-height:205px}.bottom-sheet textarea{min-height:40px}.mode-toggle button{min-height:38px}.draw-header h1{font-size:19px}}@media(min-width:760px){.draw-shell{padding:16px}.toolbar{justify-content:center}.bottom-sheet{padding:12px;max-height:270px}}`}</style>
-    <style jsx>{`
+    <section className="canvas-zone" ref={setDrawingSurface} id="draw-canvas-panel"><div ref={canvasViewportRef} className="viewport" data-testid="draw-canvas-viewport"><div className={`sketch-layers ${showingGeneratedImage ? "is-faded" : ""}`} aria-hidden="true">{useTldraw && tldrawLicenseKey ? <TldrawAdapter licenseKey={tldrawLicenseKey} onReady={(adapter) => { tldrawAdapterRef.current = adapter; adapter.setBrush(color, size); }} /> : <><canvas ref={backgroundCanvasRef} className="layer" /><canvas ref={strokeCanvasRef} className="layer" onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} onContextMenu={(event) => event.preventDefault()} aria-label="COAST drawing canvas" data-testid="draw-canvas" /></>}</div>{currentPreviewUrl ? <img className={`preview-image ${showingGeneratedImage ? "is-visible" : "is-hidden"}`} src={decodedPreview?.url ?? currentPreviewUrl} alt="COAST generated preview" draggable={false} /> : null}{currentPreviewUrl && decodedPreview?.url !== currentPreviewUrl ? <img className="preview-preload" src={currentPreviewUrl} alt="" aria-hidden="true" draggable={false} onLoad={() => setDecodedPreview({ key: currentPreviewKey ?? "", url: currentPreviewKey ? currentPreviewUrl : "" })} onError={() => setMessage("The image is ready, but its preview could not load. Reopen the card and try again.")} /> : null}<GlowCursor activeRef={glowActiveRef} trailRef={glowTrailRef} colorRef={glowColorRef} widthRef={glowWidthRef} pulse={glowPulse} reducedMotion={reducedMotion} className="pencil-glow" /><span className="canvas-hint">1024 × 1024</span></div></section>
+    <section className="bottom-sheet"><textarea value={prompt} onFocus={() => setPromptFocused(true)} onBlur={() => setPromptFocused(false)} onChange={(event) => setPrompt(event.target.value)} placeholder={refining ? "Follow-up instruction, e.g. Make the sky sunset" : "Describe the image (optional)"} aria-label="Prompt" /><div className={controls.modePicker} role="radiogroup" aria-label="Generation mode">{drawModes.map((item) => <ToolcraftButton key={item} data-mode={item} className={classNames(controls.modeButton, mode === item && controls.modeButtonActive)} role="radio" aria-checked={mode === item} aria-label={modeLabels[item]} title={modeLabels[item]} tabIndex={mode === item ? 0 : -1} onClick={() => setMode(item)} onKeyDown={(event) => modeKeyDown(event, item)}><ModeIcon mode={item} className={controls.modeIcon} /></ToolcraftButton>)}</div><div className={controls.modelCaption} aria-live="polite">{modeLabels[mode]}</div>{refining ? <button className={`context-reset ${resetContext ? "selected" : ""}`} onClick={() => setResetContext((value) => !value)}>{resetContext ? "Starting fresh from this image" : "Start fresh from this image"}</button> : null}<div className="actions">{ready ? <><button className="discard" onClick={() => void cancel()}>Discard</button><button className="secondary" disabled={animating} onClick={() => void animate()}>{animating ? "Starting…" : "Animate"}</button><button className="save" disabled={saving || job?.state !== "ready_for_save"} onClick={() => void save()}>{saving ? "Saving…" : "Save to iMessage"}</button></> : isDrawJobActive(job?.state) ? <button className="cancel" onClick={() => void cancel()}>Cancel</button> : <button className="generate" disabled={preparing || !authorized || tab === "preview"} onClick={() => void generate()}>{preparing ? "Preparing…" : "Generate"}</button>}</div><p className="message" aria-live="polite">{message}</p>{ready ? <button className="refine" onClick={refine}>Draw on this result</button> : null}</section>
+    <style>{`
+      html,body{height:100%;margin:0;overscroll-behavior:none;background:#13221b}
+      *{box-sizing:border-box}.draw-shell{height:var(--coast-draw-vvh,100dvh);overflow:hidden;overscroll-behavior:none;background:#13221b;color:#f8f1df;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));font-family:ui-sans-serif,system-ui;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:7px}.draw-top-controls{display:grid;gap:7px;min-width:0}.draw-header,.tabs,.toolbar,.bottom-sheet,.revision-strip{width:min(100%,720px);margin:0 auto}.draw-header{display:flex;justify-content:space-between;align-items:center}.eyebrow{color:#f4b544;letter-spacing:.16em;font-size:10px;font-weight:850;margin:0 0 2px}h1{font-size:22px;line-height:1.05;margin:0}.status{font-size:12px;color:#f4b544;text-align:right}.tabs{display:flex;gap:4px}.tabs button,.mode-toggle button{background:transparent;color:#d8d1be;border:0;padding:9px 13px;min-height:44px;border-radius:12px;font-weight:750}.tabs button.active,.mode-toggle button.active{background:#344a3b;color:#fff}.tabs button:disabled{opacity:.35}.revision-strip{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}.revision-strip button{display:grid;gap:1px;min-width:76px;min-height:48px;padding:6px 9px;text-align:left;color:#f8f1df;border:1px solid #526357;border-radius:10px;background:#1d3025}.revision-strip button.selected{border-color:#f4b544;background:#344a3b}.revision-strip img{width:44px;height:28px;object-fit:cover;border-radius:5px;pointer-events:none}.revision-strip small,.revision-strip em{font-size:9px;font-style:normal;color:#d8d1be;white-space:nowrap}.revision-strip em{color:#f4b544}.toolbar{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:1px 0}.toolbar button,.import{border:0;background:#344a3b;color:#f8f1df;border-radius:10px;min-height:44px;padding:8px 11px;white-space:nowrap;font-weight:700}.toolbar button:disabled{opacity:.35}.toolbar .selected{outline:2px solid #f4b544}.palette{display:flex;gap:5px}.swatch{width:34px!important;padding:0!important;border:2px solid #f8f1df!important;border-radius:50%!important;flex:0 0 34px}.size{display:flex;align-items:center;gap:4px;color:#f5d998;font-size:12px;white-space:nowrap}.size input{width:72px}.import{position:relative;cursor:pointer}.import input{position:absolute;inset:0;opacity:0;width:100%;height:100%}.canvas-zone{min-height:0;display:grid;place-items:center;overscroll-behavior:contain;touch-action:none}.viewport{position:relative;width:min(100%,720px);height:auto;max-height:100%;aspect-ratio:1;background:#fff;border-radius:14px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 8px 30px #0003}.layer,.preview-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;touch-action:none;user-select:none;-webkit-user-drag:none}.tldraw-stage{position:absolute;inset:0}.hidden{visibility:hidden}.preview-image{z-index:3}.canvas-hint{position:absolute;right:9px;bottom:7px;color:#777;background:#fff9;border-radius:7px;padding:3px 6px;font-size:10px;z-index:4}.bottom-sheet{max-height:min(34dvh,250px);overflow:auto;background:#1d3025;border:1px solid #3d5548;border-radius:16px;padding:8px;overscroll-behavior:contain}.bottom-sheet textarea{width:100%;min-height:48px;max-height:96px;resize:vertical;border:1px solid #526357;background:#25352b;color:#fff;border-radius:10px;padding:9px;font:inherit}.mode-toggle{display:flex;background:#13221b;border-radius:12px;overflow-x:auto;margin-top:7px}.mode-toggle button{white-space:nowrap;flex:1;font-size:12px;padding-inline:9px}.context-reset{width:100%;border:1px solid #526357;border-radius:9px;background:#13221b;color:#f8f1df;min-height:34px;margin-top:7px;font-weight:700}.context-reset.selected{border-color:#f4b544;color:#f4b544}.actions{display:flex;gap:6px;margin-top:7px}.generate,.cancel,.save,.discard,.secondary{border:0;border-radius:11px;min-height:44px;font-size:14px;font-weight:850}.generate,.save{background:#f4b544;color:#13221b;flex:1}.cancel,.discard{background:#7e4638;color:#fff;padding:0 13px}.secondary{background:#344a3b;color:#f8f1df;padding:0 12px}.save:disabled{opacity:.55}.message{font-size:12px;color:#d8d1be;margin:6px 2px 0;min-height:15px}.refine{width:100%;border:0;background:#f4b544;color:#13221b;border-radius:10px;min-height:40px;font-weight:850;margin-top:6px}@media(max-height:680px){.draw-shell{gap:4px}.draw-top-controls{gap:4px}.toolbar button,.import{min-height:40px}.bottom-sheet{max-height:205px}.bottom-sheet textarea{min-height:40px}.mode-toggle button{min-height:38px}.draw-header h1{font-size:19px}}@media(min-width:760px){.draw-shell{padding:16px}.toolbar{justify-content:center}.bottom-sheet{padding:12px;max-height:270px}}`}</style>
+    <style>{`
       .draw-shell{position:relative;isolation:isolate;background:transparent}
       .effects-backdrop{position:absolute;inset:0;z-index:0;pointer-events:none;background:radial-gradient(circle at 50% 20%,#274332 0%,#13221b 58%,#0d1712 100%)}
       .ghost-fibers{position:absolute;inset:0;opacity:.72}
@@ -461,5 +527,6 @@ export default function DrawStudio({ sessionId, tldrawEnabled = false, tldrawLic
       @media(prefers-reduced-motion:reduce){.view-toggle-thumb,.sketch-layers,.preview-image{transition:none}}
       @media(max-height:680px){.mode-picker button{min-height:46px}}
     `}</style>
+    <style>{`.viewport{width:var(--coast-draw-canvas-edge,min(100%,720px));height:var(--coast-draw-canvas-edge,min(100%,720px));max-height:none}`}</style>
   </main>;
 }

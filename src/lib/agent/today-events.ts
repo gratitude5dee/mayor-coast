@@ -119,9 +119,9 @@ function toPlan(
   return {
     responseText:
       filter === null
-        ? experiences.length === 1
-          ? "Here’s the verified SF move still on deck today."
-          : `I pulled the full verified SF agenda: ${experiences.length} events still on deck today.`
+          ? experiences.length === 1
+            ? "Get it active—here’s the verified SF move still on deck today."
+            : `Get it active—I pulled ${experiences.length} verified SF moves still on deck today.`
         : filter.categories.length === 0
           ? `Keeping it wide: ${experiences.length} verified SF events are still on deck today.`
           : `${experiences.length} verified ${filter.label.toLowerCase()} move${experiences.length === 1 ? "" : "s"} still on deck today.`,
@@ -322,7 +322,7 @@ export async function resolveExhaustedClarification(input: {
       ...plan,
       responseText:
         experiences.length > 0
-          ? "I widened the search—these are the cleanest verified fits."
+          ? "I widened the search—these are the cleanest verified fits. Keep it solid."
           : "I widened the verified search and didn’t find a clean match in this snapshot.",
     },
     stagedPreferenceUpdates: [],

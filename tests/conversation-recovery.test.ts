@@ -27,7 +27,7 @@ describe("native choice recovery", () => {
   it("turns a greeting into one short native discovery poll", () => {
     const plan = recover("Hi");
 
-    expect(plan.responseText).toBe("COAST is on. What’s the move tonight?");
+    expect(plan.responseText).toBe("COAST is on, my patna. What’s the move tonight?");
     expect(plan.poll).toEqual({
       question: "What are we getting into?",
       options: ["Food", "Drinks", "Something to do", "Pick for me"],

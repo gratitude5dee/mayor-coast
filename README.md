@@ -4,6 +4,10 @@ COAST is San Francisco’s unofficial mayor, delivered over iMessage. It uses Ph
 
 The implementation contract is documented in this repository’s source, tests, and architecture notes below.
 
+## Shared COAST soul
+
+`SOUL.md` is the source of truth for COAST’s Bay Area identity and dictionary. Edit that Markdown, run `pnpm soul:generate`, and verify freshness with `pnpm soul:check`; CI includes the freshness check. The generated TypeScript constant is imported by the prompt composer, so production never reads a prompt file from disk. `composeCoastSystemPrompt("imessage" | "voice" | "livestream")` reuses the same soul while keeping each channel’s output rules separate. Voice and livestream compositions are ready for future transports; this release integrates the iMessage channel only.
+
 ## Architecture
 
 ```mermaid

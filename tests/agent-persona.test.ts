@@ -7,9 +7,12 @@ import {
 } from "../src/lib/agent/runtime";
 import {
   COAST_FIRST_TURN_INTRO,
+  COAST_FIRST_TURN_PLAIN_INTRO,
   COAST_SYSTEM_PROMPT,
+  composeCoastSystemPrompt,
   withCoastFirstTurnIntro,
 } from "../src/lib/coast/persona";
+import { COAST_SOUL, COAST_SOUL_SOURCE_SHA256 } from "../src/lib/coast/soul.generated";
 import { isArtistDiscoveryRequest } from "../src/lib/coast/artists";
 import artistCatalog from "../data/artists/bay-norcal-public-v1.json";
 
@@ -18,20 +21,43 @@ describe("COAST persona", () => {
     expect(COAST_SYSTEM_PROMPT).toContain(
       "San Francisco’s unofficial mayor and a source-backed city guide",
     );
-    expect(COAST_SYSTEM_PROMPT).toContain("at most one local slang expression");
-    expect(COAST_SYSTEM_PROMPT).toContain("“Yee” is a light affirmative");
-    expect(COAST_SYSTEM_PROMPT).toContain("“smackin’” is for food");
-    expect(COAST_SYSTEM_PROMPT).toContain(
-      "“that slaps” is for music or event energy",
-    );
+    expect(COAST_SYSTEM_PROMPT).toContain("Usually use one or two fitting expressions");
+    expect(COAST_SYSTEM_PROMPT).toContain("Must be something in the water");
+    expect(COAST_SYSTEM_PROMPT).toContain("Keep safety, privacy, permissions, billing");
     expect(COAST_SYSTEM_PROMPT).toContain(
       "never a claim of city employment, authority, or affiliation",
     );
     expect(COAST_SYSTEM_PROMPT).not.toMatch(/\bAI\b/u);
   });
 
+  it("composes the same soul for each channel without leaking channel contracts", () => {
+    expect(composeCoastSystemPrompt("voice")).toContain("Channel: voice.");
+    expect(composeCoastSystemPrompt("voice")).not.toContain("coast_turn_plan");
+    expect(composeCoastSystemPrompt("livestream")).toContain("Channel: livestream.");
+    expect(composeCoastSystemPrompt("livestream")).not.toContain("selectedExternalIds");
+    expect(composeCoastSystemPrompt("imessage")).toContain("coast_turn_plan");
+  });
+
+  it("keeps the generated soul source complete and hash-addressed", () => {
+    const requiredTerms = [
+      "Must be something in the water", "Never sell my soul", "Keep it solid", "Be smooth",
+      "I’m from the Bay", "My patna", "Pull up to the city", "Game recognize game", "Mayne",
+      "Time to mob", "Bread always come first", "Ladidadi, we likes to party", "Slidin", "Dippin",
+      "Gliding", "Whipping", "Ain’t no Trickin", "Bread, Breadski, Chicken, Dough, Cake, Guap",
+      "Bands, Racks", "Hyphy", "Stay Sucka Free", "How I feel", "Going dumb", "You ain’t where I’m from",
+      "Can’t speak on it", "Get it active",
+    ];
+    for (const term of requiredTerms) expect(COAST_SOUL).toContain(term);
+    expect(COAST_SOUL_SOURCE_SHA256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
   it("owns the exact first introduction in application code and never repeats it", () => {
-    expect(withCoastFirstTurnIntro("I found three moves.", true)).toBe(COAST_FIRST_TURN_INTRO);
+    expect(withCoastFirstTurnIntro("I found three moves.", true, { creativeEnabled: true })).toBe(
+      COAST_FIRST_TURN_INTRO,
+    );
+    expect(withCoastFirstTurnIntro("I found three moves.", true, { creativeEnabled: false })).toBe(
+      COAST_FIRST_TURN_PLAIN_INTRO,
+    );
     expect(withCoastFirstTurnIntro("I found three moves.", false)).toBe(
       "I found three moves.",
     );
@@ -39,6 +65,7 @@ describe("COAST persona", () => {
       withCoastFirstTurnIntro(
         COAST_FIRST_TURN_INTRO,
         true,
+        { creativeEnabled: true },
       ),
     ).toBe(COAST_FIRST_TURN_INTRO);
   });

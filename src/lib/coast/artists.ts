@@ -17,6 +17,6 @@ export function isArtistDiscoveryRequest(value: string): boolean {
 
 export function artistLeadIn(shareKind: CoastArtistShareKind): string {
   return shareKind === "direct"
-    ? "Yee—here’s a Bay soundcheck."
-    : "Bay soundcheck for the night.";
+    ? "Get it active—here’s a Bay soundcheck."
+    : "Here’s a Bay soundcheck for the night.";
 }

@@ -96,7 +96,7 @@ export function withNativeChoiceRecovery(
   if (isGreeting(latest)) {
     return {
       ...plan,
-      responseText: "COAST is on. What’s the move tonight?",
+      responseText: "COAST is on, my patna. What’s the move tonight?",
       poll: poll("What are we getting into?", [
         "Food",
         "Drinks",
@@ -144,7 +144,7 @@ export function withNativeChoiceRecovery(
 
   return {
     ...plan,
-    responseText: "I can lock this in fast. Which part of SF should I hunt?",
+    responseText: "I can lock this in fast. Which part of SF should I hunt, my patna?",
     poll: poll("Pick a neighborhood.", NEIGHBORHOOD_OPTIONS),
   };
 }

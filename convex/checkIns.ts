@@ -577,7 +577,7 @@ export const runDue = internalMutation({
       origin: "proactive",
       checkInId: checkIn._id,
       plan: {
-        responseText: `How did ${card.observed.title.slice(0, 120)} land? I can line up the next move while you’re out.`,
+        responseText: `How did ${card.observed.title.slice(0, 120)} land? I can line up the next move while you’re out—keep it solid.`,
         selectedExternalIds: [],
         poll: {
           question: "What’s the next move?",
@@ -620,7 +620,7 @@ export const runDue = internalMutation({
       createdAtMs: nowMs,
       expiresAtMs: checkIn.anchorExpiresAtMs,
     });
-    const responseText = `How did ${card.observed.title.slice(0, 120)} land? I can line up the next move while you’re out.`;
+    const responseText = `How did ${card.observed.title.slice(0, 120)} land? I can line up the next move while you’re out—keep it solid.`;
     const deliveries = [
       { stage: "response" as const, itemKey: "response", payload: { text: responseText } },
       {
